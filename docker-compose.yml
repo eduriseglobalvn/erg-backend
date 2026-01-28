@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  # MySQL Database
+  mysql_db:
+    image: mysql:8.0
+    container_name: erg_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: Dev.erg.edu.vn
+      MYSQL_DATABASE: erg_db
+      MYSQL_USER: erg
+      MYSQL_PASSWORD: Dev.erg.edu.vn
+    ports:
+      - '3306:3306'
+    volumes:
+      - ./docker/mysql/data:/var/lib/mysql
+    networks:
+      - nest_network
+
+  # Redis Cache & Session
+  redis_cache:
+    image: redis:alpine
+    container_name: erg_redis
+    restart: always
+    ports:
+      - '6379:6379'
+    command: redis-server --save 20 1 --loglevel warning --requirepass Dev.erg.edu.vn
+    volumes:
+      - ./docker/redis/data:/data
+    networks:
+      - nest_network
+
+networks:
+  nest_network:
+    driver: bridge

@@ -1,0 +1,43 @@
+// 4. Khởi tạo Gemini AI Client
+      const genAI = new GoogleGenerativeAI(currentApiKey);
+      const model = genAI.getGenerativeModel({
+        model: 'gemini-3-flash-preview',
+      });
+
+      // Prompt Engineering: Yêu cầu trả về JSON chuẩn
+      // const prompt = `
+      //   Bạn là chuyên gia SEO và Content Marketing. Hãy viết một bài blog chi tiết về chủ đề: "${topic}".
+      //
+      //   Yêu cầu định dạng Output: Chỉ trả về một JSON Object thuần túy (không bọc trong markdown \`\`\`json).
+      //   Cấu trúc JSON:
+      //   {
+      //     "title": "Tiêu đề bài viết hấp dẫn (chuẩn SEO)",
+      //     "htmlContent": "Nội dung bài viết định dạng HTML (sử dụng h2, h3, p, ul, li, strong). Tại các vị trí cần ảnh minh họa, hãy chèn thẻ: <image-placeholder prompt='Mô tả chi tiết bức ảnh cần vẽ bằng tiếng Anh' />",
+      //     "excerpt": "Đoạn Sapo (mô tả ngắn) khoảng 2-3 câu."
+      //   }
+      // `;
+      const prompt = `
+          Bạn là một Senior Content Writer và Chuyên gia SEO với 10 năm kinh nghiệm viết blog công nghệ đời sống. Phong cách viết của bạn là: Gần gũi, kể chuyện (storytelling), dễ hiểu như đang tâm sự với bạn bè, nhưng vẫn đảm bảo tính chính xác và logic.
+
+          NHIỆM VỤ:
+          Hãy viết một bài blog chi tiết, cuốn hút về chủ đề: "${topic}".
+
+          ĐỐI TƯỢNG ĐỘC GIẢ:
+          Người dùng phổ thông, không rành kỹ thuật (non-tech). Họ cần giải pháp thực tế, không cần lý thuyết hàn lâm. Nếu có thuật ngữ chuyên ngành, hãy giải thích bằng ví dụ đời thường (ví dụ: ví von Server như cái nhà kho...).
+
+          YÊU CẦU NỘI DUNG (QUAN TRỌNG):
+          1.  **Văn phong:** Tránh tuyệt đối các từ ngữ sáo rỗng của AI (như "trong kỷ nguyên số", "mở khóa tiềm năng", "bức tranh toàn cảnh"). Hãy dùng ngôn ngữ tự nhiên, cảm xúc.
+          2.  **Cấu trúc:** - Mở bài: Bắt đầu bằng một "Hook" (câu hỏi, thống kê gây sốc, hoặc nỗi đau của người dùng) để thu hút ngay lập tức.
+              - Thân bài: Chia nhỏ bằng các thẻ h2, h3. Sử dụng bullet point (ul, li) để dễ đọc.
+              - Kết bài: Tóm tắt và kêu gọi hành động (CTA) nhẹ nhàng.
+          3.  **Độ dài:** Bài viết cần có độ sâu (khoảng 1500 - 2000 từ nếu quy đổi ra text).
+          4.  **Hình ảnh:** Tại mỗi phần chính (sau mỗi thẻ h2), hãy chèn thẻ <image-placeholder>. Prompt cho ảnh phải mô tả khung cảnh thực tế, phong cách nhiếp ảnh (photorealistic), ánh sáng tự nhiên, tỉ lệ 16:9.
+
+          YÊU CẦU ĐỊNH DẠNG OUTPUT:
+          Chỉ trả về duy nhất một JSON Object hợp lệ (không markdown, không giải thích thêm). Cấu trúc JSON bắt buộc:
+          {
+            "title": "Tiêu đề giật tít nhưng đúng sự thật, chứa từ khóa chính, tối đa 60 ký tự.",
+            "excerpt": "Đoạn sapo 2-3 câu khơi gợi sự tò mò, tóm tắt lợi ích người đọc sẽ nhận được.",
+            "htmlContent": "Nội dung bài viết chuẩn HTML. Chỉ sử dụng các thẻ: <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em>. Tuyệt đối KHÔNG dùng thẻ <html>, <head>, <body>. Chèn thẻ <image-placeholder prompt='...' /> tại vị trí hợp lý."
+          }
+        `;
