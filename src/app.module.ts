@@ -24,25 +24,60 @@ import { SeoModule } from '@/modules/seo/seo.module';
     }),
     BullModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        connection: {
-          host: configService.get('REDIS_HOST'),
-          port: configService.get('REDIS_PORT'),
-          password: configService.get('REDIS_PASS'),
-        },
-      }),
+      useFactory: async (configService: ConfigService) => {
+        const host = configService.get('REDIS_HOST');
+        if (!host) {
+          // If no Redis, BullMQ won't work properly, but we can return a dummy config or localhost
+          // For now, return localhost to avoid crash if env is missing
+          return {
+            connection: { host: '127.0.0.1', port: 6379 }
+          };
+        }
+        const port = configService.get<number>('REDIS_PORT');
+        const isTls = port !== 6379;
+
+        return {
+          connection: {
+            host,
+            port,
+            password: configService.get('REDIS_PASS'),
+            // Thêm các options giúp ổn định kết nối với Valkey/Redis
+            retryStrategy: (times) => Math.min(times * 50, 2000),
+            maxRetriesPerRequest: null,
+            tls: isTls ? {} : undefined,
+          },
+        };
+      },
       inject: [ConfigService],
     }),
     CacheModule.registerAsync({
       isGlobal: true,
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        store: redisStore,
-        host: configService.get('REDIS_HOST'),
-        port: configService.get('REDIS_PORT'),
-        auth_pass: configService.get('REDIS_PASS'),
-        ttl: 600,
-      }),
+      useFactory: async (configService: ConfigService) => {
+        const host = configService.get('REDIS_HOST');
+        const port = configService.get<number>('REDIS_PORT');
+        const isTls = port !== 6379;
+
+        // NẾU KHÔNG CÓ REDIS_HOST HOẶC MUỐN DÙNG MEMORY (VALKEY FALLBACK)
+        if (!host || host === 'memory' || host === 'none') {
+          return { store: 'memory', ttl: 600 };
+        }
+
+        return {
+          store: redisStore,
+          host,
+          port,
+          auth_pass: configService.get('REDIS_PASS'),
+          ttl: 600,
+          tls: isTls ? {} : undefined,
+          no_ready_check: true, // Thêm cái này để tránh Ready check failed trên Cloud
+          // Quan trọng: Tránh crash app khi mất kết nối Redis/Valkey
+          retry_strategy: (options: any) => {
+            if (options.attempt > 10) return undefined; // Dừng retry sau 10 lần
+            return Math.min(options.attempt * 100, 3000);
+          },
+        };
+      },
       inject: [ConfigService],
     }),
     // 1. Module Database (Global)
