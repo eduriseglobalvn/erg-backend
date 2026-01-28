@@ -36,7 +36,30 @@ async function bootstrap() {
   const httpAdapter = app.get(HttpAdapterHost);
   app.useGlobalFilters(new AllExceptionsFilter(httpAdapter));
 
-  app.enableCors();
+  // 5. TỐI ƯU CORS (Bảo mật & Hiệu suất)
+  app.enableCors({
+    origin: (origin, callback) => {
+      // Cho phép các request không có origin (như Postman hoặc Mobile App)
+      // Hoặc các domain thuộc hệ sinh thái erg.edu.vn, erg.edu.local (Dev)
+      if (
+        !origin ||
+        origin.endsWith('.erg.edu.vn') ||
+        origin === 'https://erg.edu.vn' ||
+        origin.endsWith('.erg.edu.local') || // Cho phép các subdomain local
+        origin === 'http://erg.edu.local' || // Host local chính
+        origin.includes('localhost')
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    credentials: true,
+    allowedHeaders: 'Content-Type, Accept, Authorization, X-Requested-With',
+    maxAge: 86400, // 24 giờ - Trình duyệt sẽ cache kết quả CORS, giảm request OPTIONS dư thừa
+  });
+
   await app.listen(process.env.PORT || 7860, '0.0.0.0');
   console.log(`Application is running on: ${await app.getUrl()}`);
 }
