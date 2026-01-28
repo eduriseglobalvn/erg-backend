@@ -26,14 +26,13 @@ import { SeoModule } from '@/modules/seo/seo.module';
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
         const host = configService.get('REDIS_HOST');
-        if (!host) {
-          // If no Redis, BullMQ won't work properly, but we can return a dummy config or localhost
-          // For now, return localhost to avoid crash if env is missing
+        if (!host || host === 'memory' || host === 'none') {
+          // Fallback to localhost if no redis, effectively disabling bull if not running
           return {
             connection: { host: '127.0.0.1', port: 6379 }
           };
         }
-        const port = configService.get<number>('REDIS_PORT');
+        const port = Number(configService.get('REDIS_PORT') || 6379);
         const isTls = port !== 6379;
 
         return {
@@ -41,10 +40,11 @@ import { SeoModule } from '@/modules/seo/seo.module';
             host,
             port,
             password: configService.get('REDIS_PASS'),
-            // Thêm các options giúp ổn định kết nối với Valkey/Redis
-            retryStrategy: (times) => Math.min(times * 50, 2000),
+            retryStrategy: (times) => Math.min(times * 100, 3000),
             maxRetriesPerRequest: null,
-            tls: isTls ? {} : undefined,
+            enableReadyCheck: false,
+            connectTimeout: 10000,
+            tls: isTls ? { rejectUnauthorized: false } : undefined,
           },
         };
       },
@@ -55,10 +55,9 @@ import { SeoModule } from '@/modules/seo/seo.module';
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
         const host = configService.get('REDIS_HOST');
-        const port = configService.get<number>('REDIS_PORT');
+        const port = Number(configService.get('REDIS_PORT') || 6379);
         const isTls = port !== 6379;
 
-        // NẾU KHÔNG CÓ REDIS_HOST HOẶC MUỐN DÙNG MEMORY (VALKEY FALLBACK)
         if (!host || host === 'memory' || host === 'none') {
           return { store: 'memory', ttl: 600 };
         }
@@ -69,21 +68,17 @@ import { SeoModule } from '@/modules/seo/seo.module';
           port,
           auth_pass: configService.get('REDIS_PASS'),
           ttl: 600,
-          tls: isTls ? {} : undefined,
-          no_ready_check: true, // Thêm cái này để tránh Ready check failed trên Cloud
-          // Quan trọng: Tránh crash app khi mất kết nối Redis/Valkey
+          tls: isTls ? { rejectUnauthorized: false } : undefined,
+          no_ready_check: true,
           retry_strategy: (options: any) => {
-            if (options.attempt > 10) return undefined; // Dừng retry sau 10 lần
+            if (options.total_retry_time > 1000 * 60 * 60) return undefined;
             return Math.min(options.attempt * 100, 3000);
           },
         };
       },
       inject: [ConfigService],
     }),
-    // 1. Module Database (Global)
     DatabaseModule,
-
-    // 2. Module Nghiệp vụ (QUAN TRỌNG: Phải khai báo ở đây thì autoLoadEntities mới thấy)
     AuthModule,
     UsersModule,
     SessionsModule,
