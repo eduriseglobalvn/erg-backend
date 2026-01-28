@@ -21,6 +21,7 @@ const config: Options = {
     'dist/modules/profiles/**/*.entity.js',
     'dist/modules/users/**/*.entity.js',
     'dist/modules/ai-content/**/*.entity.js',
+    'dist/modules/seo/**/*.entity.js',
   ],
   entitiesTs: [
     'src/modules/access-control/**/*.entity.ts',
@@ -32,8 +33,14 @@ const config: Options = {
     'src/modules/profiles/**/*.entity.ts',
     'src/modules/users/**/*.entity.ts',
     'src/modules/ai-content/**/*.entity.ts',
+    'src/modules/seo/**/*.entity.ts',
   ],
   debug: process.env.NODE_ENV === 'development',
+  driverOptions: {
+    connection: {
+      ssl: { rejectUnauthorized: false },
+    },
+  },
 };
 
 export default config;
