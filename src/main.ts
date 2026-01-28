@@ -47,6 +47,7 @@ async function bootstrap() {
         origin === 'https://erg.edu.vn' ||
         origin.endsWith('.erg.edu.local') || // Cho phép các subdomain local
         origin === 'http://erg.edu.local' || // Host local chính
+        origin.endsWith('.vercel.app') || // Cho phép các bản preview/deploy từ Vercel
         origin.includes('localhost')
       ) {
         callback(null, true);
