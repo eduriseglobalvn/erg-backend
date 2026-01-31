@@ -1,5 +1,7 @@
-import { Controller, Get, Post, Body, Put, Param, Delete, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Put, Param, Delete, Query, Req, UseGuards, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { PostsService } from './posts.service';
+import { StorageService } from '@/shared/services/storage.service';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
 import { PostQueryDto } from './dto/post-query.dto';
@@ -9,7 +11,82 @@ import { Permissions } from '@/modules/access-control/decorators/permissions.dec
 
 @Controller('posts')
 export class PostsController {
-  constructor(private readonly postsService: PostsService) { }
+  constructor(
+    private readonly postsService: PostsService,
+    private readonly storageService: StorageService,
+  ) { }
+
+  // ==========================================
+  // [NEW] QUẢN LÝ ẢNH (UPLOAD & DELETE)
+  // Phải đặt TRƯỚC các route có :id để tránh bị nhận nhầm là Param
+  // ==========================================
+  @Post('images/upload')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('posts.create', 'posts.update')
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  }))
+  async uploadImage(@UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No file provided');
+    const allowedMimetypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!allowedMimetypes.includes(file.mimetype)) {
+      throw new BadRequestException('Only image files are allowed (jpg, png, gif, webp)');
+    }
+    const originalName = file.originalname.split('.').slice(0, -1).join('.');
+    const url = await this.storageService.processAndUpload(file.buffer, 'posts', originalName);
+    return {
+      statusCode: 200,
+      message: 'Upload successful',
+      data: { url }
+    };
+  }
+
+  @Delete('images')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('posts.delete', 'posts.update')
+  async deleteImage(@Body('url') url: string) {
+    console.log(`[Backend] Received DELETE request for URL:`, url);
+    if (!url) throw new BadRequestException('URL is required');
+    const allowedPrefix = 'https://media.erg.edu.vn/posts/';
+    if (!url.startsWith(allowedPrefix)) {
+      throw new BadRequestException('Invalid URL: Only media.erg.edu.vn/posts/ URLs are allowed');
+    }
+    // 3. Extract & Security (Prevent path traversal)
+    const filename = url.replace(allowedPrefix, '');
+
+    // Chỉ chặn ".." để tránh thoát ra khỏi bucket, còn "/" thì cho phép để hỗ trợ sub-folders
+    if (!filename || filename.includes('..')) {
+      throw new BadRequestException('Invalid filename or security risk detected');
+    }
+
+    await this.storageService.deleteFile(url);
+    return {
+      statusCode: 200,
+      message: 'Deleted successfully'
+    };
+  }
+
+  // Xóa ảnh theo ID (Filename) - Path: /posts/images/id/:filename
+  @Delete('images/id/:filename')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('posts.delete', 'posts.update')
+  async deleteImageByPath(@Param('filename') filename: string) {
+    if (!filename) throw new BadRequestException('Filename is required');
+
+    // Chống tấn công path traversal
+    if (filename.includes('..') || filename.includes('/')) {
+      throw new BadRequestException('Invalid filename');
+    }
+
+    // Build URL để dùng lại logic của service
+    const fullUrl = `https://media.erg.edu.vn/posts/${filename}`;
+    await this.storageService.deleteFile(fullUrl);
+
+    return {
+      statusCode: 200,
+      message: 'Deleted successfully'
+    };
+  }
 
   // ==========================================
   // 1. TẠO BÀI VIẾT (MANUAL CREATE)
@@ -47,14 +124,16 @@ export class PostsController {
   // API: GET /posts/:id
   // Dùng cho cả Frontend hiển thị và Admin Edit
   // ==========================================
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.postsService.findOne(id);
-  }
-
+  // Lấy bài viết theo Slug (Dành cho SEO/Frontend) - Phải đặt TRƯỚC :id
   @Get('slug/:slug')
   findBySlug(@Param('slug') slug: string) {
     return this.postsService.findBySlug(slug);
+  }
+
+  // API: GET /posts/:id
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.postsService.findOne(id);
   }
 
   // ==========================================
@@ -77,6 +156,7 @@ export class PostsController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('posts.delete')
   remove(@Param('id') id: string) {
+    console.log(`[Backend] Deleting Post with ID:`, id);
     return this.postsService.remove(id);
   }
 
@@ -95,4 +175,5 @@ export class PostsController {
   hardDelete(@Param('id') id: string) {
     return this.postsService.hardDelete(id);
   }
+
 }

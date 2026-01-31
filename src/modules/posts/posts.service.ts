@@ -345,6 +345,14 @@ export class PostsService implements OnModuleInit {
   // 4. CẬP NHẬT BÀI VIẾT (UPDATE)
   // =================================================================
   async update(id: string, updatePostDto: UpdatePostDto, user?: User): Promise<Post> {
+    this.logger.log(`Updating Post [${id}]`);
+    if (updatePostDto.content !== undefined) {
+      this.logger.debug(`- Updating Content (Length: ${updatePostDto.content?.length})`);
+    }
+    if (updatePostDto.title) {
+      this.logger.debug(`- Updating Title: ${updatePostDto.title}`);
+    }
+
     const post = await this.findOne(id);
 
     // A. Xử lý Slug nếu có thay đổi
@@ -396,7 +404,10 @@ export class PostsService implements OnModuleInit {
     }
 
     await this.postRepository.getEntityManager().flush();
+
+    // Clear cache specifically
     await this.clearPostsCache();
+
     return post;
   }
 

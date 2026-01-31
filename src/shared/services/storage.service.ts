@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 // FIX: Đổi cách import để tránh lỗi "not callable"
 import sharp from 'sharp';
@@ -32,14 +32,19 @@ export class StorageService {
     filename?: string
   ): Promise<string> {
     try {
-      // 1. Resize & Nén WebP (Giảm dung lượng 50-70%)
+      // 1. Resize & Nén WebP (Max width 1920px)
       const processedBuffer = await sharp(buffer)
-        .resize({ width: 1200, withoutEnlargement: true })
-        .webp({ quality: 80 })
+        .resize({ width: 1920, withoutEnlargement: true })
+        .webp({ quality: 85 })
         .toBuffer();
 
-      // 2. Tạo tên file
-      const finalName = filename ? `${filename}.webp` : `${uuidv4()}.webp`;
+      // 2. Tạo tên file (Unique: UUID + Timestamp)
+      const timestamp = Date.now();
+      const uniqueId = uuidv4().slice(0, 8);
+      const finalName = filename
+        ? `${filename}-${timestamp}.webp`
+        : `${uniqueId}-${timestamp}.webp`;
+
       const key = `${folder}/${finalName}`;
 
       // 3. Upload lên R2
@@ -55,6 +60,34 @@ export class StorageService {
     } catch (error) {
       this.logger.error(`Storage Upload Error: ${error.message}`);
       throw error;
+    }
+  }
+
+  async deleteFile(fileUrl: string): Promise<void> {
+    if (!fileUrl) return;
+    try {
+      // Extract Key from URL
+      // Example URL: https://media.erg.edu.vn/posts/abc-123.webp
+      const domain = this.publicDomain.replace(/^https?:\/\//, '');
+      const urlWithoutScheme = fileUrl.replace(/^https?:\/\//, '',);
+
+      if (!urlWithoutScheme.includes(domain)) {
+        this.logger.warn(`Attempted to delete file from external domain: ${fileUrl}`);
+        return;
+      }
+
+      const key = urlWithoutScheme.substring(urlWithoutScheme.indexOf(domain) + domain.length + 1);
+
+      if (!key) return;
+
+      await this.s3Client.send(new DeleteObjectCommand({
+        Bucket: this.bucketName,
+        Key: key
+      }));
+      this.logger.log(`Deleted file: ${key}`);
+    } catch (error) {
+      // Idempotent: don't throw if not found or already deleted
+      this.logger.warn(`Storage Delete Warning: ${error.message}`);
     }
   }
 }
