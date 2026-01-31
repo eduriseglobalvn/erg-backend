@@ -37,7 +37,7 @@ import { SharedModule } from '@/shared/shared.module';
           };
         }
         const port = Number(configService.get('REDIS_PORT') || 6379);
-        const isTls = port !== 6379;
+        const isTls = configService.get('REDIS_TLS') === 'true';
 
         return {
           connection: {
@@ -60,7 +60,7 @@ import { SharedModule } from '@/shared/shared.module';
       useFactory: async (configService: ConfigService) => {
         const host = configService.get('REDIS_HOST');
         const port = Number(configService.get('REDIS_PORT') || 6379);
-        const isTls = port !== 6379;
+        const isTls = configService.get('REDIS_TLS') === 'true';
 
         if (!host || host === 'memory' || host === 'none') {
           return { store: 'memory', ttl: 600 };
