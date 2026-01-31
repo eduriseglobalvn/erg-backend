@@ -14,8 +14,8 @@ RUN yarn install --frozen-lockfile
 # Copy toàn bộ source code
 COPY . .
 
-# Build ứng dụng. Sửa thành ./node_modules/.bin/nest build để chắc chắn tìm thấy lệnh nest
-RUN ./node_modules/.bin/nest build
+# Build ứng dụng
+RUN yarn build
 
 # Giai đoạn 2: Runner
 FROM node:20-alpine AS runner
