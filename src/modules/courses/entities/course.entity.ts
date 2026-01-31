@@ -42,6 +42,9 @@ export class Course extends BaseEntity {
   @Property({ default: 0 })
   totalReviews: number = 0;
 
+  @Property({ default: 0 })
+  viewCount: number = 0;
+
   @ManyToOne(() => User)
   createdBy!: User;
 

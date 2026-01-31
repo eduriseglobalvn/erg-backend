@@ -11,6 +11,7 @@ async function bootstrap() {
   // app.useLogger(...) -> Code cũ của bạn
 
   // 2. Global Validation Pipe (Giữ nguyên)
+  app.setGlobalPrefix('api'); // <--- Thêm dòng này để chuẩn hóa
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -48,10 +49,12 @@ async function bootstrap() {
         origin.endsWith('.erg.edu.local') || // Cho phép các subdomain local
         origin === 'http://erg.edu.local' || // Host local chính
         origin.endsWith('.vercel.app') || // Cho phép các bản preview/deploy từ Vercel
-        origin.includes('localhost')
+        origin.includes('localhost') ||
+        origin.includes('127.0.0.1') // Cho phép gọi bằng IP local
       ) {
         callback(null, true);
       } else {
+        console.warn(`[CORS Blocked]: Origin "${origin}" is not allowed.`);
         callback(new Error('Not allowed by CORS'));
       }
     },

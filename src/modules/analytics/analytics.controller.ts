@@ -19,7 +19,7 @@ import { Permissions } from '../access-control/decorators/permissions.decorator'
 import { JwtService } from '@nestjs/jwt';
 import { TrackVisitDto, TrackEventDto, DashboardStatsResponse } from './dto/analytics.dto';
 
-@Controller('api/insight')
+@Controller('insight')
 export class AnalyticsController {
     constructor(
         private readonly analyticsService: AnalyticsService,
@@ -84,6 +84,8 @@ export class AnalyticsController {
             ip: realIp,
             userAgent: userAgent,
             userId: userId,
+            entityId: body.entityId,
+            entityType: body.entityType,
         });
     }
 

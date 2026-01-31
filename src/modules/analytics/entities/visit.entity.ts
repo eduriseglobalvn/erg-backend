@@ -1,7 +1,7 @@
 import { Entity, Property, Index } from '@mikro-orm/core';
 import { MongoBaseEntity } from '@/core/base/mongo-base.entity'; // Kiểm tra lại đường dẫn này
 
-@Entity() // QUAN TRỌNG: Phải có Decorator này
+@Entity({ collection: 'analytics_visits' }) // QUAN TRỌNG: Phải có Decorator này
 export class Visit extends MongoBaseEntity {
   @Property({ nullable: true })
   @Index()
@@ -44,6 +44,12 @@ export class Visit extends MongoBaseEntity {
 
   @Property({ nullable: true })
   screenResolution?: string; // 1920x1080
+
+  @Property({ nullable: true })
+  entityType?: string; // 'post', 'course', 'page'
+
+  @Property({ nullable: true })
+  entityId?: string; // slug
 
   @Property({ default: 0 })
   durationSeconds: number = 0;

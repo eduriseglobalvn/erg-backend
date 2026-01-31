@@ -6,7 +6,8 @@ import { AnalyticsEvent } from './entities/event.entity';
 import { User } from '../users/entities/user.entity';
 import { Post } from '../posts/entities/post.entity';
 import { PostCategory } from '../posts/entities/post-category.entity';
-import { PostStatus } from '@/shared/enums/app.enum';
+import { Course } from '../courses/entities/course.entity';
+import { PostStatus, CourseStatus } from '@/shared/enums/app.enum';
 import * as geoip from 'geoip-lite';
 import { UAParser } from 'ua-parser-js';
 
@@ -44,6 +45,8 @@ export class AnalyticsService {
         private readonly postRepo: EntityRepository<Post>,
         @InjectRepository(PostCategory)
         private readonly categoryRepo: EntityRepository<PostCategory>,
+        @InjectRepository(Course)
+        private readonly courseRepo: EntityRepository<Course>,
     ) { }
 
     // ========== TRACKING METHODS ==========
@@ -54,9 +57,11 @@ export class AnalyticsService {
         ip?: string;
         userAgent?: string;
         userId?: number;
+        entityId?: string;
+        entityType?: string;
     }) {
         try {
-            this.logger.log(`Tracking visit for URL: ${data.url}, IP: ${data.ip}, UserID: ${data.userId}`);
+            this.logger.log(`Tracking visit for URL: ${data.url}, IP: ${data.ip}, Entity: ${data.entityType}/${data.entityId}`);
 
             const parser = new UAParser(data.userAgent);
             const result = parser.getResult();
@@ -67,12 +72,15 @@ export class AnalyticsService {
                 deviceType = 'desktop';
             }
 
+            // 1. Lưu vào MongoDB (Dữ liệu chi tiết phục vụ Analytics)
             const visit = this.visitRepo.create({
                 url: data.url,
                 referrer: data.referrer,
                 ipAddress: data.ip,
                 userAgent: data.userAgent,
                 userId: data.userId,
+                entityId: data.entityId,
+                entityType: data.entityType,
                 durationSeconds: 0,
                 createdAt: new Date(),
                 updatedAt: new Date(),
@@ -86,6 +94,47 @@ export class AnalyticsService {
             });
 
             await this.visitRepo.getEntityManager().persistAndFlush(visit);
+
+            // 2. TỐI ƯU: Cập nhật lượt xem vào MySQL dựa trên thông tin FE truyền vào (Ưu tiên)
+            // hoặc fallback bằng cách parse URL
+            let finalType = data.entityType;
+            let finalId = data.entityId;
+
+            // Fallback URL Parsing nếu FE không truyền explicit
+            if (!finalType || !finalId) {
+                if (data.url.includes('/posts/')) {
+                    finalType = 'post';
+                    const parts = data.url.split('/posts/');
+                    finalId = parts[1].split(/[?#]/)[0].replace(/\/$/, '');
+                } else if (data.url.includes('/courses/')) {
+                    finalType = 'course';
+                    const parts = data.url.split('/courses/');
+                    finalId = parts[1].split(/[?#]/)[0].replace(/\/$/, '');
+                }
+            }
+
+            // Tiến hành cập nhật viewCount trong MySQL
+            if (finalType && finalId) {
+                try {
+                    if (finalType === 'post') {
+                        const post = await this.postRepo.findOne({ slug: finalId });
+                        if (post) {
+                            post.viewCount = (post.viewCount || 0) + 1;
+                            await this.postRepo.getEntityManager().flush();
+                            this.logger.log(`Incremented viewCount for post: ${finalId}`);
+                        }
+                    } else if (finalType === 'course') {
+                        const course = await this.courseRepo.findOne({ slug: finalId });
+                        if (course) {
+                            course.viewCount = (course.viewCount || 0) + 1;
+                            await this.courseRepo.getEntityManager().flush();
+                            this.logger.log(`Incremented viewCount for course: ${finalId}`);
+                        }
+                    }
+                } catch (err) {
+                    this.logger.error(`Failed to update viewCount for ${finalType}: ${finalId}`, err.stack);
+                }
+            }
 
             this.logger.log(`Visit persisted successfully. ID: ${visit.id}, MongoID: ${visit._id}`);
 
@@ -178,21 +227,33 @@ export class AnalyticsService {
             { fields: ['createdAt', 'deviceType', 'ipAddress'] } // Chỉ lấy fields cần thiết
         );
 
-        // 3. Grouping Logic
-        const statsMap: Record<string, { desktop: Set<string>; mobile: Set<string>; }> = {};
+        this.logger.log(`Found ${visits.length} visits in DB for the selected range.`);
 
-        // Helper to init date key
+        // 3. Grouping Logic - TỐI ƯU: Dùng locale date để tránh lệch múi giờ
+        const statsMap: Record<string, { desktop: Set<string>; mobile: Set<string>; }> = {};
         const getInitStat = () => ({ desktop: new Set<string>(), mobile: new Set<string>() });
+
+        // Helper function để lấy chuỗi YYYY-MM-DD theo giờ VN
+        const formatDateLocal = (date: Date) => {
+            const d = new Date(date);
+            // Cộng thêm 7 tiếng (VN) hoặc dùng toLocaleDateString với timezone
+            return new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Asia/Ho_Chi_Minh',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            }).format(d);
+        };
 
         // Iterate visits
         for (const visit of visits) {
-            const dateKey = new Date(visit.createdAt).toISOString().split('T')[0]; // YYYY-MM-DD
+            const dateKey = formatDateLocal(visit.createdAt);
             if (!statsMap[dateKey]) {
                 statsMap[dateKey] = getInitStat();
             }
 
             const isMobile = visit.deviceType === 'mobile' || visit.deviceType === 'tablet';
-            const identifier = visit.ipAddress || 'unknown'; // Dùng IP làm unique visitor identifier
+            const identifier = visit.ipAddress || 'unknown';
 
             if (isMobile) {
                 statsMap[dateKey].mobile.add(identifier);
@@ -201,22 +262,26 @@ export class AnalyticsService {
             }
         }
 
-        // 4. Fill missing dates (để biểu đồ không bị đứt quãng)
+        // 4. Fill missing dates
         const result: VisitorStat[] = [];
         const currentDate = new Date(startTime);
 
-        while (currentDate <= endTime) {
-            const dateKey = currentDate.toISOString().split('T')[0];
-            const stat = statsMap[dateKey] || getInitStat();
+        // Đảm bảo quét qua cả ngày hiện tại
+        const endDayKey = formatDateLocal(endTime);
+        let currentDayKey = '';
+
+        do {
+            currentDayKey = formatDateLocal(currentDate);
+            const stat = statsMap[currentDayKey] || getInitStat();
 
             result.push({
-                date: dateKey,
+                date: currentDayKey,
                 desktop: stat.desktop.size,
                 mobile: stat.mobile.size,
             });
 
             currentDate.setDate(currentDate.getDate() + 1);
-        }
+        } while (currentDayKey !== endDayKey && currentDate <= new Date(endTime.getTime() + 86400000));
 
         return result;
     }
@@ -230,11 +295,12 @@ export class AnalyticsService {
         const previousTo = new Date(from);
         previousTo.setDate(previousTo.getDate() - 1);
 
-        const [currentVisits, previousVisits, currentNewUsers, previousNewUsers] = await Promise.all([
+        const [currentVisits, previousVisits, currentNewUsers, previousNewUsers, interactions] = await Promise.all([
             this.visitRepo.find({ createdAt: { $gte: from, $lte: to } }),
             this.visitRepo.find({ createdAt: { $gte: previousFrom, $lte: previousTo } }),
             this.countNewUsers(from, to),
             this.countNewUsers(previousFrom, previousTo),
+            this.calculateInteractionStats(from, to),
         ]);
 
         const currentSummary = this.calculateRawSummary(currentVisits);
@@ -255,9 +321,10 @@ export class AnalyticsService {
             trafficChart: this.calculateAdvancedTrafficChart(currentVisits, from, to),
             locations: this.calculateLocationStats(currentVisits),
             devices: this.calculateDeviceStats(currentVisits),
-            content: this.calculateContentStats(currentVisits),
+            content: await this.calculateContentStats(currentVisits),
             peakHours: this.calculatePeakHours(currentVisits),
             trafficSources: this.calculateTrafficSources(currentVisits),
+            interactions: interactions,
         };
     }
 
@@ -481,31 +548,88 @@ export class AnalyticsService {
         };
     }
 
-    private calculateContentStats(visits: Visit[]) {
-        const pageMap: Record<string, { url: string; title: string; views: number }> = {};
+    private async calculateContentStats(visits: Visit[]) {
+        const pageMap: Record<string, { url: string; title: string; views: number; category?: string; entityId?: string }> = {};
+        const typeViews: Record<string, number> = {};
+        const postSlugs = new Set<string>();
+
         visits.forEach(v => {
             const url = v.url || '';
-            if (!url) return;
+            if (!url || url.includes('/admin')) return;
+
             const cleanUrl = url.split('?')[0];
+            const entityType = v.entityType;
+            const entityId = v.entityId;
+
             if (!pageMap[cleanUrl]) {
                 let title = cleanUrl;
-                if (cleanUrl.includes('/courses/')) {
-                    title = cleanUrl.split('/courses/')[1] || cleanUrl;
-                } else if (cleanUrl.includes('/posts/')) {
-                    title = cleanUrl.split('/posts/')[1] || cleanUrl;
-                } else if (cleanUrl.includes('/tin-tuc/')) {
-                    title = cleanUrl.split('/tin-tuc/')[1] || cleanUrl;
+                let category = 'Others';
+
+                if (entityType === 'course' || cleanUrl.includes('/courses/')) {
+                    category = 'Course';
+                    title = entityId || cleanUrl.split('/courses/')[1] || cleanUrl;
+                } else if (entityType === 'post' || cleanUrl.includes('/posts/')) {
+                    category = 'Post';
+                    title = entityId || cleanUrl.split('/posts/')[1] || cleanUrl;
+                    if (entityId) postSlugs.add(entityId);
                 }
-                pageMap[cleanUrl] = { url: cleanUrl, title, views: 0 };
+
+                pageMap[cleanUrl] = { url: cleanUrl, title, views: 0, category, entityId };
             }
             pageMap[cleanUrl].views++;
+
+            const cat = pageMap[cleanUrl].category || 'Others';
+            typeViews[cat] = (typeViews[cat] || 0) + 1;
         });
+
+        // Nâng cao: Lấy phân phối theo Chuyên mục thực tế (AI, Marketing...) từ MySQL
+        const categoryInterest: Record<string, number> = {};
+        if (postSlugs.size > 0) {
+            const postsWithCats = await this.postRepo.find(
+                { slug: { $in: Array.from(postSlugs) } },
+                { populate: ['category'] }
+            );
+
+            postsWithCats.forEach(p => {
+                const catName = p.category?.name || 'Uncategorized';
+                // Tính toán trọng số quan tâm dựa trên lượt xem của bài viết đó trong tập visits
+                const views = Object.values(pageMap).find(pm => pm.entityId === p.slug)?.views || 0;
+                categoryInterest[catName] = (categoryInterest[catName] || 0) + views;
+            });
+        }
+
         const allPages = Object.values(pageMap).sort((a, b) => b.views - a.views);
-        const topCourses = allPages.filter(p => p.url.includes('/courses/')).slice(0, 5);
-        const topPosts = allPages.filter(p => p.url.includes('/posts/') || p.url.includes('/tin-tuc/')).slice(0, 5);
-        const topPages = allPages.slice(0, 10);
-        return { topCourses, topPosts, topPages };
+
+        return {
+            topPages: allPages.slice(0, 10),
+            topCourses: allPages.filter(p => p.category === 'Course').slice(0, 5),
+            topPosts: allPages.filter(p => p.category === 'Post').slice(0, 5),
+            interestByType: Object.entries(typeViews).map(([name, value]) => ({ name, value })),
+            interestByCategory: Object.entries(categoryInterest).map(([name, value]) => ({ name, value })),
+            trendingPosts: allPages.filter(p => p.category === 'Post').slice(0, 5)
+        };
     }
+
+    /**
+     * Thống kê các tương tác (click, action) từ người dùng
+     */
+    private async calculateInteractionStats(from: Date, to: Date) {
+        const events = await this.eventRepo.find(
+            { createdAt: { $gte: from, $lte: to } },
+            { fields: ['eventType'] }
+        );
+
+        const eventMap: Record<string, number> = {};
+        events.forEach(e => {
+            eventMap[e.eventType] = (eventMap[e.eventType] || 0) + 1;
+        });
+
+        return Object.entries(eventMap)
+            .map(([name, count]) => ({ name, count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 5);
+    }
+
 
     // ========== NEW: POST ANALYTICS SUMMARY ==========
 

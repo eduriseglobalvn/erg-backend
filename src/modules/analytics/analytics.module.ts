@@ -8,13 +8,14 @@ import { AnalyticsEvent } from './entities/event.entity';
 import { User } from '../users/entities/user.entity';
 import { Post } from '../posts/entities/post.entity';
 import { PostCategory } from '../posts/entities/post-category.entity';
+import { Course } from '../courses/entities/course.entity';
 
 @Module({
     imports: [
         // MongoDB entities - Specify contextName!
         MikroOrmModule.forFeature([Visit, AnalyticsEvent], 'mongo-connection'),
         // MySQL entities (Default context)
-        MikroOrmModule.forFeature([User, Post, PostCategory]),
+        MikroOrmModule.forFeature([User, Post, PostCategory, Course]),
         JwtModule.register({}),
     ],
     controllers: [AnalyticsController],

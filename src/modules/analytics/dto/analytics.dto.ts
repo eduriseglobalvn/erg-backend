@@ -56,7 +56,19 @@ export interface ContentStats {
     topCourses: ContentItem[];
     topPosts: ContentItem[];
     topPages: ContentItem[];
+    /** Phân loại theo Type (Post/Course) */
+    interestByType?: { name: string; value: number }[];
+    /** Phân loại theo Chuyên mục thực tế (AI, Marketing...) */
+    interestByCategory?: { name: string; value: number }[];
+    /** Các bài viết đang có xu hướng xem nhiều trong kỳ */
+    trendingPosts?: ContentItem[];
 }
+
+export interface InteractionStat {
+    name: string;
+    count: number;
+}
+
 
 // ========== PEAK HOURS ==========
 export interface PeakHour {
@@ -101,6 +113,8 @@ export interface DashboardStatsResponse {
     peakHours: PeakHour[];
     /** Nguồn truy cập */
     trafficSources: TrafficSource[];
+    /** Thống kê các tương tác quan trọng (click, submit...) */
+    interactions?: InteractionStat[];
 }
 
 // ========== INPUT DTO ==========
@@ -114,6 +128,14 @@ export class TrackVisitDto {
     @IsString()
     @IsOptional()
     referrer?: string;
+
+    @IsString()
+    @IsOptional()
+    entityId?: string; // Slug của bài viết hoặc khóa học
+
+    @IsString()
+    @IsOptional()
+    entityType?: string; // 'post', 'course', 'category'
 }
 
 export class TrackEventDto {

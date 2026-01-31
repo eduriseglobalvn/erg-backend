@@ -8,6 +8,7 @@ import { AuthModule } from '@/modules/auth/auth.module';
 import { UsersModule } from '@/modules/users/users.module';
 import { SessionsModule } from '@/modules/sessions/sessions.module';
 import { BullModule } from '@nestjs/bullmq';
+import { ScheduleModule } from '@nestjs/schedule';
 import { MailModule } from '@/shared/mail/mail.module';
 import { AiContentModule } from '@/modules/ai-content/ai-content.module';
 import { PostsModule } from '@/modules/posts/posts.module';
@@ -15,6 +16,8 @@ import { AccessControlModule } from '@/modules/access-control/access-control.mod
 import { AnalyticsModule } from '@/modules/analytics/analytics.module';
 import { SitemapModule } from '@/modules/sitemap/sitemap.module';
 import { SeoModule } from '@/modules/seo/seo.module';
+import { CrawlerModule } from '@/modules/crawler/crawler.module';
+import { SharedModule } from '@/shared/shared.module';
 
 @Module({
   imports: [
@@ -22,6 +25,7 @@ import { SeoModule } from '@/modules/seo/seo.module';
       isGlobal: true, // Để các module khác không cần import lại
       envFilePath: '.env',
     }),
+    ScheduleModule.forRoot(),
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
@@ -89,6 +93,8 @@ import { SeoModule } from '@/modules/seo/seo.module';
     AnalyticsModule,
     SitemapModule,
     SeoModule,
+    CrawlerModule,
+    SharedModule,
   ],
 })
 export class AppModule { }

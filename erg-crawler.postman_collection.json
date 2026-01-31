@@ -1,0 +1,75 @@
+{
+    "info": {
+        "_postman_id": "crawl-api-collection",
+        "name": "ERG Crawler API",
+        "description": "API Collection for Crawler Module",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "Trigger RSS Crawl",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"rssId\": \"your-uuid-here\"\n}"
+                },
+                "url": {
+                    "raw": "{{baseUrl}}/api/crawler/rss/trigger",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "api",
+                        "crawler",
+                        "rss",
+                        "trigger"
+                    ]
+                }
+            },
+            "response": []
+        },
+        {
+            "name": "Trigger URL Run",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"url\": \"https://dantri.com.vn/giao-duc/...\ நிலையம்\",\n    \"type\": \"STATIC\"\n}"
+                },
+                "url": {
+                    "raw": "{{baseUrl}}/api/crawler/url/run",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "api",
+                        "crawler",
+                        "url",
+                        "run"
+                    ]
+                }
+            },
+            "response": []
+        }
+    ],
+    "variable": [
+        {
+            "key": "baseUrl",
+            "value": "http://localhost:3000",
+            "type": "string"
+        }
+    ]
+}

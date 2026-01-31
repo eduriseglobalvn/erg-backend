@@ -35,6 +35,7 @@ const config: Options = {
     'src/modules/ai-content/**/*.entity.ts',
     'src/modules/seo/**/*.entity.ts',
   ],
+  allowGlobalContext: true,
   debug: process.env.NODE_ENV === 'development',
   driverOptions: {
     connection: {
