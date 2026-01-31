@@ -45,4 +45,4 @@ EXPOSE 3003
 
 # Lệnh chạy chính thức
 # Nếu NestJS của bạn build ra dist/src/main.js, hãy đổi thành ["node", "dist/src/main.js"]
-CMD ["node", "dist/main.js"]
+CMD ["node", "dist/src/main.js"]

@@ -64,7 +64,7 @@ async function bootstrap() {
     maxAge: 86400, // 24 giờ - Trình duyệt sẽ cache kết quả CORS, giảm request OPTIONS dư thừa
   });
 
-  await app.listen(process.env.PORT || 7860, '0.0.0.0');
+  await app.listen(process.env.PORT || 3003, '0.0.0.0');
   console.log(`Application is running on: ${await app.getUrl()}`);
 }
 bootstrap();
