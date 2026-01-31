@@ -47,14 +47,14 @@ async function bootstrap() {
 
       // Danh sách các pattern được phép
       const allowedPatterns = [
-        /\.erg\.edu\.vn$/,           // *.erg.edu.vn
-        /^https:\/\/erg\.edu\.vn$/,  // https://erg.edu.vn
-        /\.erg\.edu\.local$/,        // *.erg.edu.local (Dev)
-        /^http:\/\/erg\.edu\.local$/, // http://erg.edu.local
-        /\.vercel\.app$/,            // *.vercel.app (Vercel deployments)
-        /localhost/,                 // localhost:*
-        /127\.0\.0\.1/,              // 127.0.0.1:*
-        /\.vuongtran\.io\.vn$/,      // *.vuongtran.io.vn (Coolify domain)
+        /\.erg\.edu\.vn$/,                    // *.erg.edu.vn
+        /^https:\/\/erg\.edu\.vn$/,           // https://erg.edu.vn
+        /\.erg\.edu\.local(:\d+)?$/,          // *.erg.edu.local:* (với hoặc không có port)
+        /^http:\/\/erg\.edu\.local(:\d+)?$/,  // http://erg.edu.local:* (với hoặc không có port)
+        /\.vercel\.app$/,                     // *.vercel.app (Vercel deployments)
+        /localhost/,                          // localhost:*
+        /127\.0\.0\.1/,                       // 127.0.0.1:*
+        /\.vuongtran\.io\.vn$/,               // *.vuongtran.io.vn (Coolify domain)
       ];
 
       const isAllowed = allowedPatterns.some(pattern => pattern.test(origin));
