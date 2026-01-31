@@ -2,6 +2,9 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
+# Coolify auto-injects NODE_ENV=production. We need dev deps for build.
+ENV NODE_ENV=development
+
 # Cài đặt công cụ để build các thư viện native
 RUN apk add --no-cache libc6-compat python3 make g++
 
