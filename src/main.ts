@@ -40,28 +40,37 @@ async function bootstrap() {
   // 5. TỐI ƯU CORS (Bảo mật & Hiệu suất)
   app.enableCors({
     origin: (origin, callback) => {
-      // Cho phép các request không có origin (như Postman hoặc Mobile App)
-      // Hoặc các domain thuộc hệ sinh thái erg.edu.vn, erg.edu.local (Dev)
-      if (
-        !origin ||
-        origin.endsWith('.erg.edu.vn') ||
-        origin === 'https://erg.edu.vn' ||
-        origin.endsWith('.erg.edu.local') || // Cho phép các subdomain local
-        origin === 'http://erg.edu.local' || // Host local chính
-        origin.endsWith('.vercel.app') || // Cho phép các bản preview/deploy từ Vercel
-        origin.includes('localhost') ||
-        origin.includes('127.0.0.1') // Cho phép gọi bằng IP local
-      ) {
+      // Cho phép các request không có origin (Postman, Mobile App, Server-to-Server)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      // Danh sách các pattern được phép
+      const allowedPatterns = [
+        /\.erg\.edu\.vn$/,           // *.erg.edu.vn
+        /^https:\/\/erg\.edu\.vn$/,  // https://erg.edu.vn
+        /\.erg\.edu\.local$/,        // *.erg.edu.local (Dev)
+        /^http:\/\/erg\.edu\.local$/, // http://erg.edu.local
+        /\.vercel\.app$/,            // *.vercel.app (Vercel deployments)
+        /localhost/,                 // localhost:*
+        /127\.0\.0\.1/,              // 127.0.0.1:*
+        /\.vuongtran\.io\.vn$/,      // *.vuongtran.io.vn (Coolify domain)
+      ];
+
+      const isAllowed = allowedPatterns.some(pattern => pattern.test(origin));
+
+      if (isAllowed) {
         callback(null, true);
       } else {
-        console.warn(`[CORS Blocked]: Origin "${origin}" is not allowed.`);
-        callback(new Error('Not allowed by CORS'));
+        console.warn(`[CORS Blocked]: Origin "${origin}" is not in allowed list.`);
+        // Không throw Error, chỉ reject bằng cách return false
+        callback(null, false);
       }
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     allowedHeaders: 'Content-Type, Accept, Authorization, X-Requested-With',
-    maxAge: 86400, // 24 giờ - Trình duyệt sẽ cache kết quả CORS, giảm request OPTIONS dư thừa
+    maxAge: 86400, // 24 giờ - Cache CORS preflight
   });
 
   await app.listen(process.env.PORT || 3003, '0.0.0.0');
