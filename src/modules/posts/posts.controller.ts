@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Body, Put, Param, Delete, Query, Req, UseGuards, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { PostsService } from './posts.service';
 import { StorageService } from '@/shared/services/storage.service';
@@ -89,6 +90,23 @@ export class PostsController {
   }
 
   // ==========================================
+  // [NEW] XEM TRƯỚC BÀI VIẾT (PREVIEW)
+  // ==========================================
+  @Post('preview')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('posts.create', 'posts.update')
+  async savePreview(@Body() body: any) {
+    const { id, ...data } = body;
+    const previewId = await this.postsService.savePreviewDraft(data, id);
+    return { id: previewId };
+  }
+
+  @Get('preview/:id')
+  async getPreview(@Param('id') id: string) {
+    return this.postsService.getPreviewDraft(id);
+  }
+
+  // ==========================================
   // 1. TẠO BÀI VIẾT (MANUAL CREATE)
   // API: POST /posts
   // ==========================================
@@ -125,13 +143,19 @@ export class PostsController {
   // Dùng cho cả Frontend hiển thị và Admin Edit
   // ==========================================
   // Lấy bài viết theo Slug (Dành cho SEO/Frontend) - Phải đặt TRƯỚC :id
+  // Lấy bài viết theo Slug (Dành cho SEO/Frontend) - Phải đặt TRƯỚC :id
   @Get('slug/:slug')
+  @UseInterceptors(CacheInterceptor)
+  @CacheTTL(300) // 5 minutes
   findBySlug(@Param('slug') slug: string) {
     return this.postsService.findBySlug(slug);
   }
 
   // API: GET /posts/:id
+  // API: GET /posts/:id
   @Get(':id')
+  @UseInterceptors(CacheInterceptor)
+  @CacheTTL(300)
   findOne(@Param('id') id: string) {
     return this.postsService.findOne(id);
   }

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsUUID, IsObject, IsBoolean } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEnum, IsUUID, IsObject, IsBoolean, IsNumber } from 'class-validator';
 import { PostStatus } from '@/shared/enums/app.enum';
 import { SchemaType } from '../entities/post.entity';
 
@@ -59,4 +59,30 @@ export class CreatePostDto {
   @IsEnum(SchemaType)
   @IsOptional()
   schemaType?: SchemaType;
+
+  // SEO Analysis Scores (From Frontend)
+  @IsNumber()
+  @IsOptional()
+  seoScore?: number;
+
+  @IsNumber()
+  @IsOptional()
+  readabilityScore?: number;
+
+  @IsNumber()
+  @IsOptional()
+  keywordDensity?: number;
+
+  // AI Content Tracking
+  @IsBoolean()
+  @IsOptional()
+  isCreatedByAI?: boolean;
+
+  @IsString()
+  @IsOptional()
+  aiPrompt?: string;
+
+  @IsString()
+  @IsOptional()
+  aiJobId?: string;
 }

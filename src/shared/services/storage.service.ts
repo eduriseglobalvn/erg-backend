@@ -63,6 +63,29 @@ export class StorageService {
     }
   }
 
+  async uploadRawFile(
+    buffer: Buffer,
+    folder: string,
+    filename: string,   // e.g. 'nguyen-van-a-1740373200000.pdf'
+    mimetype: string,
+  ): Promise<string> {
+    try {
+      const key = `${folder}/${filename}`;
+
+      await this.s3Client.send(new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        Body: buffer,
+        ContentType: mimetype,
+      }));
+
+      return `${this.publicDomain}/${key}`;
+    } catch (error) {
+      this.logger.error(`Raw File Upload Error: ${error.message}`);
+      throw error;
+    }
+  }
+
   async deleteFile(fileUrl: string): Promise<void> {
     if (!fileUrl) return;
     try {

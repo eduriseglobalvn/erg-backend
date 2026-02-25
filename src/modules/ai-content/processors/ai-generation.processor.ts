@@ -11,6 +11,13 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { v4 as uuidv4 } from 'uuid';
 import { EntityManager } from '@mikro-orm/core';
 import slugify from 'slugify';
+import { PostsService } from '@/modules/posts/posts.service';
+import { NotificationsService } from '@/modules/notifications/notifications.service';
+import { NotificationType } from '@/modules/notifications/entities/notification.entity';
+import { SeoTitleService } from '@/modules/seo/services/seo-title.service';
+import { SeoMetaService } from '@/modules/seo/services/seo-meta.service';
+import { SeoImageAltService } from '@/modules/seo/services/seo-image-alt.service';
+import { AutoLinkingService } from '@/modules/seo/services/auto-linking.service';
 
 import { Post } from '@/modules/posts/entities/post.entity';
 import { PostCategory } from '@/modules/posts/entities/post-category.entity';
@@ -32,6 +39,12 @@ export class AiGenerationProcessor extends WorkerHost {
     private seoAnalyzerService: SeoAnalyzerService,
     private configService: ConfigService,
     private readonly em: EntityManager,
+    private readonly postsService: PostsService,
+    private readonly notificationsService: NotificationsService,
+    private readonly seoTitleService: SeoTitleService,
+    private readonly seoMetaService: SeoMetaService,
+    private readonly seoImageAltService: SeoImageAltService,
+    private readonly autoLinkingService: AutoLinkingService,
   ) {
     super();
   }
@@ -71,9 +84,9 @@ export class AiGenerationProcessor extends WorkerHost {
   private async handleGeneratePost(job: Job<any>): Promise<any> {
     const em = this.em.fork();
     let currentApiKey = '';
+    const { topic, userId, categoryId } = job.data;
 
     try {
-      const { topic, userId, categoryId } = job.data;
       this.logger.log(`[Job ${job.id}] Processing Topic: ${topic}`);
 
       // 1. Lấy dữ liệu
@@ -95,17 +108,21 @@ export class AiGenerationProcessor extends WorkerHost {
           Bạn là một Senior Content Writer và Art Director chuyên nghiệp.
           
           NHIỆM VỤ:
-          Viết một bài blog chi tiết, chuyên sâu về chủ đề: "${topic}".
+          Viết một bài blog chuyên sâu, giàu thông tin và chuẩn SEO về chủ đề: "${topic}". 
+          Đối tượng độc giả là học sinh, sinh viên và phụ huynh tại Việt Nam quan tâm đến giáo dục quốc tế, kỹ năng số và công nghệ.
           
           QUY TẮC NGÔN NGỮ (QUAN TRỌNG NHẤT):
-          1.  **Nội dung bài viết (Title, Excerpt, HTML):** Viết hoàn toàn bằng **TIẾNG VIỆT**.
-          2.  **Mô tả hình ảnh (Prompt trong thẻ placeholder):** Viết hoàn toàn bằng **TIẾNG ANH (English)**.
+          1.  **Nội dung bài viết (Title, Excerpt, HTML):** Viết hoàn toàn bằng **TIẾNG VIỆT**, giọng văn truyền cảm hứng, chuyên nghiệp.
+          2.  **Mô tả hình ảnh (Prompt trong thẻ placeholder):** Viết hoàn toàn bằng **TIẾNG ANH (English)** để AI vẽ ảnh.
+          
+          YÊU CẦU SEO & CẤU TRÚC:
+          - Sử dụng các thẻ Heading (h2, h3) chứa từ khóa liên quan một cách tự nhiên.
+          - Nội dung giàu thông tin (giá trị thực cho người đọc), độ dài khoảng 800-1200 từ.
+          - Các đoạn văn ngắn gọn, dễ đọc.
           
           YÊU CẦU VỀ HÌNH ẢNH (ART DIRECTION):
-          - Đừng viết prompt ngắn cũn cỡn (Ví dụ SAI: "Laptop").
-          - Hãy viết prompt chi tiết để AI vẽ ảnh hiểu được bối cảnh.
-          - Công thức prompt: [Subject] + [Action] + [Context/Background] + [Lighting/Mood].
-          - Ví dụ ĐÚNG: "A focused software engineer typing on a laptop with matrix code on screen, dark modern office background, neon blue and purple lighting, cinematic, photorealistic".
+          - Viết prompt chi tiết (Subject + Action + Background + Lighting).
+          - Ví dụ: "A modern digital classroom in Vietnam, students using tablets, bright daylight, high-tech atmosphere, photorealistic".
 
           YÊU CẦU CẤU TRÚC JSON OUTPUT:
           {
@@ -179,11 +196,14 @@ export class AiGenerationProcessor extends WorkerHost {
           const fileName = `posts/${postSlug}/image-${uuidv4().slice(0, 4)}`;
           const publicUrl = await this.storageService.processAndUpload(imgBuffer, 'posts', fileName);
 
-          // C. Replace HTML
+          // C. AI Alt Text Generation (TIẾNG VIỆT cho SEO)
+          const altText = await this.seoImageAltService.generateSingleAltText(processedHtml, topic, publicUrl, user);
+
+          // D. Replace HTML
           const imgHtml = `
-            <figure class="my-6">
-              <img src="${publicUrl}" alt="${imagePrompt}" class="w-full rounded-lg shadow-md" loading="lazy" />
-              <figcaption class="text-center text-sm text-gray-500 mt-2 italic">${imagePrompt}</figcaption>
+            <figure class="my-8">
+              <img src="${publicUrl}" alt="${altText}" title="${aiData.title}" class="w-full rounded-xl shadow-lg border border-gray-100" loading="lazy" />
+              <figcaption class="text-center text-sm text-gray-500 mt-3 italic font-medium">${altText}</figcaption>
             </figure>
           `;
           processedHtml = processedHtml.replace(originalTag, imgHtml);
@@ -196,46 +216,52 @@ export class AiGenerationProcessor extends WorkerHost {
 
       await job.updateProgress(90);
 
-      // --- 5. SEO & SAVE ---
-      // [UPDATE 4] Tính điểm SEO & Tạo Meta
+      // --- 5. PREMIUM SEO OPTIMIZATION ---
+      const appUser = await em.findOne(User, { id: userId });
+
+      // A. Generate High-Quality Metadata
+      const [finalTitles, finalMetas] = await Promise.all([
+        this.seoTitleService.generateTitles(topic, processedHtml, appUser as User),
+        this.seoMetaService.generateMetaDescriptions(topic, processedHtml, appUser as User)
+      ]);
+
+      const metaTitle = finalTitles[0]?.title || aiData.title;
+      const metaDescription = finalMetas[0]?.description || aiData.excerpt;
+
+      // B. Final Content Polish (Auto-linking)
+      const linkResult = await this.autoLinkingService.applyAutoLinks(processedHtml, ""); // temporary
+      processedHtml = linkResult.updatedContent;
+
       const seoAnalysis = this.seoAnalyzerService.analyze(processedHtml, topic);
-      const autoMeta = this.seoAnalyzerService.generateMeta(aiData.title, processedHtml);
 
       // 5. Lưu Database
       const uniqueSlug = slugify(aiData.title, { lower: true, strict: true }) + '-' + uuidv4().slice(0, 4);
 
-      const newPost = em.create(Post, {
+      this.logger.log(`[Job ${job.id}] Persisting new post via PostsService. ID: ${uuidv4().substring(0, 8)}...`);
+
+      const newPost = await this.postsService.create({
         title: aiData.title,
         slug: uniqueSlug,
         excerpt: aiData.excerpt,
         content: processedHtml,
-
-        // Lưu TOC vào meta
         meta: {
           toc: aiData.tableOfContents,
           aiJobId: job.id
         },
-
-        status: PostStatus.DRAFT,
-        category: category,
-        thumbnailUrl: thumbnailUrl,
-        author: user,
-        createdBy: user,
+        aiJobId: job.id,
         isCreatedByAI: true,
         aiPrompt: topic,
-        isPublished: false,
-
-        viewCount: 0,
-        commentCount: 0,
-
-        // SEO Fields
+        status: PostStatus.DRAFT,
+        categoryId: category.id,
+        thumbnailUrl: thumbnailUrl || undefined,
         seoScore: seoAnalysis.score,
         focusKeyword: topic,
-        metaTitle: autoMeta.metaTitle,
-        metaDescription: autoMeta.metaDescription,
-      });
+        metaTitle: metaTitle,
+        metaDescription: metaDescription,
+      } as any, user);
 
-      await em.persistAndFlush(newPost);
+      this.logger.log(`[Job ${job.id}] ✅ Successfully created AI post. ID: ${newPost.id}`);
+
       await job.updateProgress(100);
 
       return {
@@ -246,6 +272,20 @@ export class AiGenerationProcessor extends WorkerHost {
 
     } catch (error) {
       this.logger.error(`Generate Post Job Failed: ${error.message}`);
+
+      // Gửi thông báo lỗi
+      await this.notificationsService.create({
+        userId: userId,
+        type: NotificationType.AI_POST_FAILED,
+        title: 'Tạo bài viết AI thất bại',
+        message: `Không thể tạo bài viết về "${topic}": ${error.message}`,
+        metadata: {
+          jobId: job.id,
+          topic,
+          error: error.message,
+        },
+      });
+
       if (currentApiKey && (error.message.includes('429') || error.message.includes('Quota'))) {
         await this.apiKeyService.reportError(currentApiKey, error);
       }

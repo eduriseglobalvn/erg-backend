@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, OnModuleInit, Logger, BadRequestException, Inject } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit, Logger, BadRequestException, Inject, GoneException } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { InjectRepository } from '@mikro-orm/nestjs';
@@ -15,6 +15,13 @@ import slugify from 'slugify';
 import { v4 as uuidv4 } from 'uuid';
 import { PostStatus } from '@/shared/enums/app.enum';
 import { SeoAnalyzerService } from '@/modules/seo/services/seo-analyzer.service';
+import { SchemaMarkupService } from '@/modules/seo/services/schema-markup.service';
+import { SeoHistoryService } from '@/modules/seo/services/seo-history.service';
+import { NotificationsService } from '@/modules/notifications/notifications.service';
+import { ReviewsService } from '@/modules/reviews/reviews.service';
+import { RedirectService } from '@/modules/seo/services/redirect.service';
+import * as cheerio from 'cheerio';
+import { NotificationType } from '@/modules/notifications/entities/notification.entity';
 
 @Injectable()
 export class PostsService implements OnModuleInit {
@@ -27,21 +34,27 @@ export class PostsService implements OnModuleInit {
     private readonly em: EntityManager,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     private readonly seoAnalyzerService: SeoAnalyzerService,
+    private readonly schemaMarkupService: SchemaMarkupService,
+    private readonly seoHistoryService: SeoHistoryService,
+    private readonly notificationsService: NotificationsService,
+    private readonly reviewsService: ReviewsService,
+    private readonly redirectService: RedirectService,
   ) { }
 
   private async clearPostsCache() {
     try {
-      // Assuming Redis store is used which supports 'keys' command
-      // Safer way: Iterate or usage store-specific method. 
-      // For now, we rely on the specific redis-store "keys" method if available, or just ignore if not supported (and rely on TTL).
+      this.logger.log('Invalidating posts cache...');
+      // 1. Try deleting specific keys if store supports it
       const store = this.cacheManager.store as any;
-      if (store.keys && store.del) {
+      if (typeof store.keys === 'function') {
         const keys = await store.keys('CACHE_POSTS_QUERY_*');
         if (keys && keys.length > 0) {
-          await store.del(keys);
+          await Promise.all(keys.map((k: string) => this.cacheManager.del(k)));
           this.logger.log(`Cleared ${keys.length} post cache keys`);
         }
       }
+      // 2. Clear known global keys
+      await this.cacheManager.del('CACHE_POSTS_ALL');
     } catch (error) {
       this.logger.error('Failed to clear post cache', error);
     }
@@ -161,12 +174,14 @@ export class PostsService implements OnModuleInit {
       // Giá trị mặc định
       viewCount: 0,
       commentCount: 0,
-      isCreatedByAI: false,
-      aiPrompt: undefined,
-      // aiJobId: undefined, // Removed duplicate, it's already part of ...createPostDto if provided
+      isCreatedByAI: createPostDto.isCreatedByAI ?? false,
+      aiPrompt: createPostDto.aiPrompt,
+      aiJobId: createPostDto.aiJobId,
 
       // AUTO-FILL SEO FIELDS IF MISSING
       seoScore: createPostDto.focusKeyword && finalContent ? this.seoAnalyzerService.analyze(finalContent, createPostDto.focusKeyword).score : 0,
+      readabilityScore: finalContent ? this.seoAnalyzerService.analyze(finalContent, createPostDto.focusKeyword).readabilityScore : 0,
+      keywordDensity: createPostDto.focusKeyword && finalContent ? this.seoAnalyzerService.analyze(finalContent, createPostDto.focusKeyword).keywordDensity : 0,
       focusKeyword: createPostDto.focusKeyword,
       metaTitle: createPostDto.metaTitle || (createPostDto.title ? this.seoAnalyzerService.generateMeta(createPostDto.title, finalContent || '').metaTitle : undefined),
       metaDescription: createPostDto.metaDescription || (finalContent ? this.seoAnalyzerService.generateMeta(createPostDto.title, finalContent).metaDescription : undefined),
@@ -176,7 +191,132 @@ export class PostsService implements OnModuleInit {
     });
 
     await this.postRepository.getEntityManager().persistAndFlush(post);
+
+    // ===== AUTO-GENERATE ADVANCED SEO METADATA =====
+    try {
+      // Generate schema markup if post has author and category populated
+      if (post.author && post.category && finalContent) {
+        const schemaGraph = this.schemaMarkupService.generateSchemaGraph(post);
+        post.schemaMarkup = schemaGraph;
+
+        // Auto-generate Open Graph if not provided
+        if (!post.openGraph) {
+          post.openGraph = {
+            title: post.metaTitle || post.title,
+            description: post.metaDescription,
+            image: post.thumbnailUrl,
+            imageWidth: 1200,
+            imageHeight: 630,
+            imageAlt: post.title,
+            type: 'article',
+            locale: 'vi_VN',
+            siteName: 'EDURISE GLOBAL',
+            url: `https://erg.edu.vn/posts/${post.slug}`,
+            article: {
+              publishedTime: post.publishedAt?.toISOString(),
+              modifiedTime: post.updatedAt.toISOString(),
+              author: [post.author.fullName || post.author.email],
+              section: post.category.name,
+              tags: post.keywords?.split(',').map(k => k.trim()) || [],
+            },
+          };
+        }
+
+        // Auto-generate Twitter Card if not provided
+        if (!post.twitterCard) {
+          post.twitterCard = {
+            card: 'summary_large_image',
+            site: '@ergvietnam',
+            title: (post.metaTitle || post.title).substring(0, 70),
+            description: (post.metaDescription || '').substring(0, 200),
+            image: post.thumbnailUrl,
+            imageAlt: post.title,
+          };
+        }
+
+        // Auto-generate robots meta if not provided
+        if (!post.robotsMeta) {
+          post.robotsMeta = {
+            index: true,
+            follow: true,
+            maxImagePreview: 'large',
+            maxSnippet: -1,
+            maxVideoPreview: -1,
+          };
+        }
+
+        await this.postRepository.getEntityManager().flush();
+
+        // Record SEO history
+        // Record SEO history
+        const seoAnalysis = this.seoAnalyzerService.analyzeComprehensive(post);
+        await this.seoHistoryService.recordSnapshot(post, seoAnalysis);
+      }
+    } catch (err) {
+      this.logger.error('Failed to generate SEO metadata', err);
+      // Don't fail the request just because SEO generation failed
+    }
+
     await this.clearPostsCache(); // Invalidate cache
+
+    // [NOTIFICATION] Gửi thông báo khi bài viết được tạo thành công
+    try {
+      if (user && user.id) {
+        // Determine type based on DTO fields
+        let notiType = NotificationType.CRAWL_COMPLETED; // Default/Generic
+        let title = 'Bài viết mới đã được tạo';
+
+        if (createPostDto.isCreatedByAI) {
+          notiType = NotificationType.AI_POST_COMPLETED;
+          title = 'Bài viết AI đã được tạo thành công';
+        } else if (createPostDto.aiJobId) {
+          // Assuming crawl jobs pass aiJobId or allow frontend to pass a flag?
+          // For now, if it's not AI, it's either Manual or Crawl.
+          // Crawler sets aiPrompt to "Crawled from: ..."
+          if (createPostDto.aiPrompt && createPostDto.aiPrompt.startsWith('Crawled from:')) {
+            notiType = NotificationType.CRAWL_COMPLETED;
+            title = 'Cào bài viết thành công';
+          } else {
+            // Manual creation from CMS typically won't have aiJobId/aiPrompt unless specified
+            // But for now, let's treat generic as AI_POST_COMPLETED or create a NEW TYPE if needed,
+            // or just use AI_POST_COMPLETED if we want to reuse icons.
+            // Let's stick to valid enum types.
+            // Manual posts usually don't need notification to SELF?
+            // But user asked "Không có API nào... hiển thị". So they want notification even for manual.
+            // We can use AI_POST_COMPLETED as a "Post Completed" generic for now or add MANUAL_POST_COMPLETED later.
+            // Use AI_POST_COMPLETED for now if no better option, or CRAWL if that fits.
+            // Actually, let's leave generic metadata.
+          }
+        } else {
+          // Manual Post
+          // Maybe no type fits perfectly? Let's use AI_POST_COMPLETED for "New Post" generic notion
+          // Or update Enum?
+        }
+
+        // Simple logic:
+        const isCrawl = createPostDto.aiPrompt?.startsWith('Crawled from:');
+        const isAI = createPostDto.isCreatedByAI;
+
+        const type = isAI ? NotificationType.AI_POST_COMPLETED : (isCrawl ? NotificationType.CRAWL_COMPLETED : NotificationType.AI_POST_COMPLETED);
+
+        await this.notificationsService.create({
+          userId: user.id,
+          type: type,
+          title: isCrawl ? 'Cào bài viết thành công' : 'Tạo bài viết thành công',
+          message: `Bài viết "${post.title}" đã được lưu vào hệ thống.`,
+          metadata: {
+            postId: post.id,
+            slug: post.slug,
+            isAI,
+            isCrawl
+          }
+        });
+      }
+    } catch (err) {
+      this.logger.error('Failed to send notification for created post', err);
+      // Don't fail the request just because notification failed
+    }
+
     return post;
   }
 
@@ -316,29 +456,93 @@ export class PostsService implements OnModuleInit {
   // 3. LẤY CHI TIẾT (FIND ONE)
   // =================================================================
   async findOne(id: string): Promise<Post> {
-    const post = await this.postRepository.findOne(
+    console.log(`[PostsService] Finding post by ID: "${id}"`);
+    // 1. Try find by Primary Key (id)
+    let post = await this.postRepository.findOne(
       { id },
       { populate: ['category', 'author'] },
     );
-    if (!post) throw new NotFoundException(`Post #${id} not found`);
+
+    // 2. [FALLBACK] If not found, try find by aiJobId
+    if (!post) {
+      console.log(`[PostsService] ID not found in PK, trying aiJobId: "${id}"`);
+      post = await this.postRepository.findOne(
+        { aiJobId: id },
+        { populate: ['category', 'author'] },
+      );
+    }
+
+    if (!post) {
+      console.warn(`[PostsService] ❌ Post with ID/JobID "${id}" NOT FOUND in database.`);
+      throw new NotFoundException(`Post #${id} not found`);
+    }
+
+    console.log(`[PostsService] ✅ Post found: "${post.title}" (DeletedAt: ${post.deletedAt})`);
+
+    // [NEW] Append Rating Stats
+    try {
+      const rating = await this.reviewsService.getStats(post.id);
+      (post as any).rating = rating;
+    } catch (e) {
+      this.logger.warn(`Failed to get rating for post ${post.id}: ${e.message}`);
+    }
+
+    // [NEW] Hreflang Alternates (Mock/Placeholder)
+    (post as any).alternates = {
+      vi: `https://erg.edu.vn/posts/${post.slug}`,
+      en: `https://en.erg.edu.vn/posts/${post.slug}` // Logic can be improved
+    };
+
     return post;
   }
 
   async findBySlug(slug: string): Promise<Post> {
+    // 1. Try find ACTIVE post (By default MikroORM filters should handle deletedAt=null, but we make sure)
     const post = await this.postRepository.findOne(
-      { slug },
-      { populate: ['category', 'author'] }, // Lấy kèm thông tin Category và Tác giả
+      { slug, deletedAt: null },
+      { populate: ['category', 'author'] },
     );
 
-    if (!post) {
-      throw new NotFoundException(`Post with slug '${slug}' not found`);
+    // 2. If Found Active Post
+    if (post) {
+      if (!post.isPublished) {
+        // Draft/Pending -> Return 404 as if it doesn't exist for public
+        throw new NotFoundException(`Post not available`);
+      }
+
+      // Tăng viewCount lên 1 mỗi khi có người đọc (Tùy chọn)
+      post.viewCount = (post.viewCount || 0) + 1;
+      await this.postRepository.getEntityManager().flush();
+
+      // [NEW] Append Rating Stats
+      try {
+        const rating = await this.reviewsService.getStats(post.id);
+        (post as any).rating = rating;
+      } catch (e) {
+        this.logger.warn(`Failed to get rating for post ${post.id}: ${e.message}`);
+      }
+
+      // [NEW] Hreflang Alternates (Mock/Placeholder)
+      (post as any).alternates = {
+        vi: `https://erg.edu.vn/posts/${post.slug}`,
+        en: `https://en.erg.edu.vn/posts/${post.slug}`
+      };
+
+      return post;
     }
 
-    // Tăng viewCount lên 1 mỗi khi có người đọc (Tùy chọn)
-    post.viewCount = (post.viewCount || 0) + 1;
-    await this.postRepository.getEntityManager().flush();
+    // 3. [SEO] Check if Soft Deleted -> Return 410 GONE
+    const deletedPost = await this.postRepository.findOne(
+      { slug, deletedAt: { $ne: null } },
+      { filters: false } // Disable soft-delete filter
+    );
 
-    return post;
+    if (deletedPost) {
+      throw new GoneException(`Post with slug '${slug}' has been permanently deleted.`);
+    }
+
+    // 4. Truly Not Found
+    throw new NotFoundException(`Post with slug '${slug}' not found`);
   }
 
   // =================================================================
@@ -357,7 +561,27 @@ export class PostsService implements OnModuleInit {
 
     // A. Xử lý Slug nếu có thay đổi
     if (updatePostDto.slug) {
+      const oldSlug = post.slug;
       updatePostDto.slug = slugify(updatePostDto.slug, { lower: true, strict: true });
+      const newSlug = updatePostDto.slug;
+
+      // [NEW] Auto-Redirect logic
+      if (oldSlug !== newSlug) {
+        // Create 301 Redirect from old URL to new URL
+        // Using /posts/:slug convention (Frontend URL)
+        // If categories imply different structure, logic needs to be smarter.
+        // Assuming /posts/:slug or /khoa-hoc/:slug?
+        // Let's use generic logic or specific to known Post type.
+        // For now: /posts/old -> /posts/new
+        await this.redirectService.create({
+          fromPattern: `/posts/${oldSlug}`,
+          toUrl: `/posts/${newSlug}`,
+          type: '301',
+          isActive: true,
+        }).catch(err => {
+          this.logger.warn(`Failed to create auto-redirect for ${oldSlug}->${newSlug}: ${err.message}`);
+        });
+      }
     }
 
     // B. Xử lý Content & TOC nếu có thay đổi content
@@ -516,26 +740,48 @@ export class PostsService implements OnModuleInit {
   // =================================================================
   // 3.6. SITEMAP HELPERS
   // =================================================================
-  async getSitemapUrls() {
+  async getSitemapUrls(domainFilter?: string) {
     const posts = await this.postRepository.find(
       { isPublished: true, deletedAt: null },
       {
         populate: ['category'], // Load Category to decide Domain
-        fields: ['slug', 'updatedAt', 'publishedAt', 'title', 'category.slug', 'category.name'],
+        fields: ['slug', 'updatedAt', 'publishedAt', 'title', 'category.slug', 'category.name', 'content'],
         orderBy: { updatedAt: 'DESC' },
       }
     );
 
     return posts.map((post) => {
-      const domain = this.getDomainByCategory(post.category?.slug);
+      const canonicalDomain = this.getDomainByCategory(post.category?.slug);
+      let targetDomain = canonicalDomain;
+      const requestedDomain = domainFilter ? (domainFilter.startsWith('http') ? domainFilter : `https://${domainFilter}`) : null;
+
+      if (requestedDomain) {
+        // --- FILTERING LOGIC ---
+        // 1. Subdomains (Strict): Only own content
+        if (requestedDomain !== 'https://erg.edu.vn') {
+          if (canonicalDomain !== requestedDomain) return null;
+          targetDomain = requestedDomain;
+        }
+        // 2. Main Domain: Include Main content + AI content (Cross-post)
+        else {
+          if (canonicalDomain !== requestedDomain && canonicalDomain !== 'https://ai.erg.edu.vn') {
+            // Skip other subdomains (e.g. Tuyen Dung, Tin Hoc Quoc Te) on Main
+            return null;
+          }
+          // Force URL to be Main Domain
+          targetDomain = requestedDomain;
+        }
+      }
+
       return {
-        loc: `${domain}/posts/${post.slug}`, // Full URL
+        loc: `${targetDomain}/posts/${post.slug}`, // Full URL respecting requested domain
         lastmod: post.updatedAt || post.publishedAt || new Date(),
         changefreq: 'weekly',
         priority: 0.8,
         title: post.title,
+        images: this.extractImages(post.content || '', post.title),
       };
-    });
+    }).filter(Boolean); // Filter nulls
   }
 
   private getDomainByCategory(categorySlug?: string): string {
@@ -552,5 +798,39 @@ export class PostsService implements OnModuleInit {
     if (categorySlug.includes('tuyen-dung') || categorySlug.includes('career')) return 'https://tuyendung.erg.edu.vn';
 
     return 'https://erg.edu.vn'; // Default Main Domain
+  }
+
+  private extractImages(content: string, defaultTitle: string): any[] {
+    const $ = cheerio.load(content);
+    const images: any[] = [];
+    $('img').each((i, el) => {
+      const src = $(el).attr('src');
+      if (src && !src.startsWith('data:')) { // Ignore base64
+        images.push({
+          loc: src,
+          title: $(el).attr('alt') || defaultTitle,
+          caption: $(el).attr('title') || '',
+        });
+      }
+    });
+    return images;
+  }
+
+  /**
+   * [NEW] Lưu trữ bản nháp tạm thời vào Redis (Hỗ trợ Live Preview)
+   * @param data Dữ liệu bài viết
+   * @param id ID của bản nháp (nếu muốn ghi đè lên bản cũ để Live Update)
+   */
+  async savePreviewDraft(data: any, id?: string): Promise<string> {
+    const previewId = id || uuidv4();
+    const redisKey = `POST_PREVIEW:${previewId}`;
+    await this.cacheManager.set(redisKey, data, 1800000); // 30 phút
+    return previewId;
+  }
+
+  async getPreviewDraft(id: string): Promise<any> {
+    const data = await this.cacheManager.get(`POST_PREVIEW:${id}`);
+    if (!data) throw new NotFoundException('Bản xem trước đã hết hạn hoặc không tồn tại.');
+    return data;
   }
 }

@@ -11,6 +11,7 @@ import { CrawlHistory } from './entities/crawl-history.entity';
 import { ScraperType } from './entities/scraper-config.entity';
 import { Post } from '../posts/entities/post.entity';
 import { PostCategory } from '../posts/entities/post-category.entity';
+import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class CrawlerService {
@@ -96,10 +97,16 @@ export class CrawlerService {
             for (const item of parsed.items) {
                 if (!item.link) continue;
 
-                // Check lịch sử xem cào chưa
-                const exists = await this.historyRepo.findOne({ url: item.link });
-                if (exists && exists.status === 'SUCCESS') {
-                    continue; // Đã cào rồi -> Bỏ qua
+                // [MỚI] So sánh chéo Mongo + MySQL
+                const history = await this.historyRepo.findOne({ url: item.link });
+                let postExists = false;
+                if (history && history.postId) {
+                    const post = await this.postRepo.findOne({ id: history.postId, deletedAt: null });
+                    if (post) postExists = true;
+                }
+
+                if (postExists) {
+                    continue; // Chỉ bỏ qua nếu thực sự đã có bài trong MySQL
                 }
 
                 // Đẩy job cào bài viết con
@@ -107,8 +114,9 @@ export class CrawlerService {
                     url: item.link,
                     rssId: feed.id,
                     targetCategoryId: feed.targetCategoryId,
-                    autoPublish: feed.autoPublish, // Kế thừa quyền đăng
-                    selectorConfig: feed.selectorConfig // Kế thừa config selector
+                    autoPublish: feed.autoPublish,
+                    selectorConfig: feed.selectorConfig,
+                    manual: false // Tự động sync thì không cần manual
                 });
             }
         } catch (error) {
@@ -138,15 +146,38 @@ export class CrawlerService {
 
         // Map lại để trả về data sạch
         const items = await Promise.all(parsed.items.map(async item => {
-            const exists = await this.historyRepo.findOne({ url: item.link });
+            const history = await this.historyRepo.findOne({ url: item.link });
+
+            // [TRUTH-CHECKER] Kiểm tra thực tế trong MySQL
+            let isFoundInDb = false;
+            let existingPostId = history?.postId;
+
+            if (existingPostId) {
+                const post = await this.postRepo.findOne({ id: existingPostId, deletedAt: null });
+                if (post) isFoundInDb = true;
+            }
+
+            // Fallback: Tìm theo URL nếu history bị lỗi/mất postId
+            if (!isFoundInDb) {
+                const postByUrl = await this.postRepo.findOne({
+                    aiPrompt: { $like: `%${item.link}%` },
+                    deletedAt: null
+                });
+                if (postByUrl) {
+                    isFoundInDb = true;
+                    existingPostId = postByUrl.id;
+                }
+            }
+
             return {
                 title: item.title,
                 link: item.link,
                 pubDate: item.pubDate,
                 guid: item.guid,
-                thumbnail: getThumbnail(item), // Add thumbnail here
-                isCrawled: !!exists,
-                status: exists?.status
+                thumbnail: getThumbnail(item),
+                isCrawled: isFoundInDb,
+                status: isFoundInDb ? 'SUCCESS' : (history?.status || 'PENDING'),
+                postId: existingPostId
             };
         }));
 
@@ -167,14 +198,22 @@ export class CrawlerService {
 
             // Map items
             const items = await Promise.all(parsed.items.map(async item => {
-                const exists = await this.historyRepo.findOne({ url: item.link });
+                const history = await this.historyRepo.findOne({ url: item.link });
+
+                // So sánh chéo với MySQL
+                let isFoundInDb = false;
+                if (history && history.postId) {
+                    const post = await this.postRepo.findOne({ id: history.postId, deletedAt: null });
+                    if (post) isFoundInDb = true;
+                }
+
                 return {
                     title: item.title,
                     link: item.link,
                     pubDate: item.pubDate,
                     guid: item.guid,
-                    isCrawled: !!exists,
-                    status: exists?.status
+                    isCrawled: isFoundInDb,
+                    status: isFoundInDb ? 'SUCCESS' : (history?.status || 'PENDING')
                 };
             }));
 
@@ -324,15 +363,32 @@ export class CrawlerService {
 
             // Map lại data để FE hiển thị
             const items = await Promise.all(parsed.items.map(async item => {
-                const exists = await this.historyRepo.findOne({ url: item.link });
+                const history = await this.historyRepo.findOne({ url: item.link });
+
+                // [TRUTH-CHECKER] So sánh chéo với MySQL tức thì
+                let isFoundInDb = false;
+                if (history && history.postId) {
+                    const post = await this.postRepo.findOne({ id: history.postId, deletedAt: null });
+                    if (post) isFoundInDb = true;
+                }
+
+                // Fallback URL search
+                if (!isFoundInDb) {
+                    const postByUrl = await this.postRepo.findOne({
+                        aiPrompt: { $like: `%${item.link}%` },
+                        deletedAt: null
+                    });
+                    if (postByUrl) isFoundInDb = true;
+                }
+
                 return {
                     title: item.title,
                     link: item.link,
                     pubDate: item.pubDate,
                     guid: item.guid,
                     thumbnail: getThumbnail(item),
-                    isCrawled: !!exists,
-                    status: exists?.status
+                    isCrawled: isFoundInDb,
+                    status: isFoundInDb ? 'SUCCESS' : (history?.status || 'PENDING')
                 };
             }));
 
@@ -351,24 +407,44 @@ export class CrawlerService {
      * Tạo RSS Feed và trigger cào các bài đã chọn ngay lập tức
      */
     async createRssWithSelection(dto: { feed: Partial<RssFeed>, selectedLinks: string[] }) {
-        // 1. Tạo RSS Feed trong DB
-        const feed = this.rssRepo.create(dto.feed as any);
+        // 1. Tìm hoặc cập nhật RSS Feed (Xử lý cả CREATE và UPDATE)
+        let feed: RssFeed;
+        if (dto.feed.id) {
+            const existing = await this.rssRepo.findOne({ id: dto.feed.id } as any);
+            if (existing) {
+                wrap(existing).assign(dto.feed);
+                feed = existing;
+            } else {
+                feed = this.rssRepo.create(dto.feed as any);
+            }
+        } else {
+            feed = this.rssRepo.create(dto.feed as any);
+        }
         await this.rssRepo.getEntityManager().persistAndFlush(feed);
 
         // 2. Trigger cào các bài được chọn
         if (dto.selectedLinks && dto.selectedLinks.length > 0) {
-            this.logger.log(`Triggering specific crawl for ${dto.selectedLinks.length} items from ${feed.name}`);
+            this.logger.log(`[RSS Selection] Manual triggered for ${dto.selectedLinks.length} items. Feed: ${feed.name}`);
+            const crawlJobs = dto.selectedLinks.map((link, index) => {
+                // Tạo JobId hoàn toàn ngẫu nhiên để BullMQ không deduplicate
+                const safeUrl = Buffer.from(link).toString('base64').substring(0, 20);
+                const jobId = `manual-crawl-${safeUrl}-${Date.now()}-${index}`;
 
-            for (const link of dto.selectedLinks) {
-                await this.crawlerQueue.add('crawl_url', {
+                this.logger.log(`[QUEUE ADD] Job ${index + 1}/${dto.selectedLinks.length} | JobID: ${jobId} | URL: ${link}`);
+
+                return this.crawlerQueue.add('crawl_url', {
                     url: link,
                     rssId: feed.id,
-                    targetCategoryId: feed.targetCategoryId,
+                    targetCategoryId: dto.feed.targetCategoryId || feed.targetCategoryId,
                     autoPublish: feed.autoPublish,
                     selectorConfig: feed.selectorConfig,
-                    manual: true
-                });
-            }
+                    manual: true // Bắt buộc cào ngay
+                }, { jobId });
+            });
+
+            const results = await Promise.all(crawlJobs);
+            this.logger.log(`[RSS Selection] ✅ All ${dto.selectedLinks.length} jobs have been added to queue.`);
+            this.logger.log(`[RSS Selection] Job IDs: ${results.map(j => j.id).join(', ')}`);
         }
 
         return feed;

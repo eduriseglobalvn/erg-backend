@@ -1,6 +1,7 @@
 import { NestFactory, Reflector, HttpAdapterHost } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { TransformInterceptor } from './core/interceptors/transform.interceptor'; // Import mới
 import { AllExceptionsFilter } from './core/filters/all-exceptions.filter'; // Import mới
 
@@ -73,7 +74,29 @@ async function bootstrap() {
     maxAge: 86400, // 24 giờ - Cache CORS preflight
   });
 
+  // 6. SWAGGER API DOCUMENTATION
+  const config = new DocumentBuilder()
+    .setTitle('ERG Backend API')
+    .setDescription('EDURISE GLOBAL - Advanced SEO & Content Management System')
+    .setVersion('1.0')
+    .addTag('SEO', 'SEO Analysis & Optimization endpoints')
+    .addTag('Posts', 'Content Management endpoints')
+    .addTag('Auth', 'Authentication endpoints')
+    .addTag('Analytics', 'Analytics & Tracking endpoints')
+    .addBearerAuth()
+    .build();
+
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api-docs', app, document, {
+    swaggerOptions: {
+      persistAuthorization: true,
+      tagsSorter: 'alpha',
+      operationsSorter: 'alpha',
+    },
+  });
+
   await app.listen(process.env.PORT || 3003, '0.0.0.0');
   console.log(`Application is running on: ${await app.getUrl()}`);
+  console.log(`📚 Swagger API Docs: ${await app.getUrl()}/api-docs`);
 }
 bootstrap();

@@ -1,0 +1,333 @@
+{
+    "info": {
+        "name": "ERG Backend - SEO API",
+        "description": "Advanced SEO System API Endpoints",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        "_postman_id": "seo-api-collection",
+        "version": "1.0.0"
+    },
+    "item": [
+        {
+            "name": "SEO Health",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{baseUrl}}/seo/health",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "seo",
+                        "health"
+                    ]
+                },
+                "description": "Get overall SEO health metrics for the website"
+            },
+            "response": [
+                {
+                    "name": "Success",
+                    "originalRequest": {
+                        "method": "GET",
+                        "url": "{{baseUrl}}/seo/health"
+                    },
+                    "status": "OK",
+                    "code": 200,
+                    "_postman_previewlanguage": "json",
+                    "header": [],
+                    "body": "{\n  \"totalPosts\": 150,\n  \"postsAbove80\": 45,\n  \"averageSeoScore\": 72,\n  \"postsNeedImprovement\": 105\n}"
+                }
+            ]
+        },
+        {
+            "name": "Analyze Post",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{baseUrl}}/seo/analyze/:postId",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "seo",
+                        "analyze",
+                        ":postId"
+                    ],
+                    "variable": [
+                        {
+                            "key": "postId",
+                            "value": "{{postId}}",
+                            "description": "Post UUID"
+                        }
+                    ]
+                },
+                "description": "Get comprehensive SEO analysis for a specific post"
+            },
+            "response": [
+                {
+                    "name": "Success",
+                    "status": "OK",
+                    "code": 200,
+                    "_postman_previewlanguage": "json",
+                    "body": "{\n  \"overallScore\": 85,\n  \"basic\": {\n    \"score\": 90,\n    \"readabilityScore\": 75,\n    \"keywordDensity\": 0.025,\n    \"wordCount\": 1500,\n    \"suggestions\": [\"Content length is good\"]\n  },\n  \"links\": {\n    \"internalLinks\": 5,\n    \"externalLinks\": 3,\n    \"nofollowLinks\": 1,\n    \"suggestions\": []\n  },\n  \"images\": {\n    \"totalImages\": 8,\n    \"imagesWithAlt\": 6,\n    \"imagesWithoutAlt\": [],\n    \"suggestions\": []\n  },\n  \"headings\": {\n    \"h1Count\": 1,\n    \"h2Count\": 5,\n    \"h3Count\": 8,\n    \"hierarchy\": true,\n    \"suggestions\": []\n  },\n  \"freshness\": {\n    \"score\": 95,\n    \"daysSincePublished\": 5,\n    \"daysSinceUpdated\": 2,\n    \"suggestion\": \"Content is fresh\"\n  },\n  \"recommendations\": [\"Add more internal links\"]\n}"
+                }
+            ]
+        },
+        {
+            "name": "Get Schema Markup",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{baseUrl}}/seo/schema/:postId",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "seo",
+                        "schema",
+                        ":postId"
+                    ],
+                    "variable": [
+                        {
+                            "key": "postId",
+                            "value": "{{postId}}"
+                        }
+                    ]
+                },
+                "description": "Get JSON-LD schema markup for a post"
+            }
+        },
+        {
+            "name": "Validate Schema",
+            "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                    "raw": "{{baseUrl}}/seo/schema/:postId/validate",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "seo",
+                        "schema",
+                        ":postId",
+                        "validate"
+                    ],
+                    "variable": [
+                        {
+                            "key": "postId",
+                            "value": "{{postId}}"
+                        }
+                    ]
+                },
+                "description": "Validate schema markup for a post"
+            },
+            "response": [
+                {
+                    "name": "Valid",
+                    "status": "OK",
+                    "code": 200,
+                    "body": "{\n  \"valid\": true,\n  \"errors\": []\n}"
+                },
+                {
+                    "name": "Invalid",
+                    "status": "OK",
+                    "code": 200,
+                    "body": "{\n  \"valid\": false,\n  \"errors\": [\"Missing @context\", \"Invalid @type\"]\n}"
+                }
+            ]
+        },
+        {
+            "name": "Get SEO History",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{baseUrl}}/seo/history/:postId?days=30",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "seo",
+                        "history",
+                        ":postId"
+                    ],
+                    "query": [
+                        {
+                            "key": "days",
+                            "value": "30",
+                            "description": "Number of days to look back (default: 30)"
+                        }
+                    ],
+                    "variable": [
+                        {
+                            "key": "postId",
+                            "value": "{{postId}}"
+                        }
+                    ]
+                },
+                "description": "Get SEO history for a post over the last N days"
+            }
+        },
+        {
+            "name": "Get SEO Trends",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{baseUrl}}/seo/trends/:postId?days=30",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "seo",
+                        "trends",
+                        ":postId"
+                    ],
+                    "query": [
+                        {
+                            "key": "days",
+                            "value": "30"
+                        }
+                    ],
+                    "variable": [
+                        {
+                            "key": "postId",
+                            "value": "{{postId}}"
+                        }
+                    ]
+                },
+                "description": "Get SEO trend analysis with insights"
+            }
+        },
+        {
+            "name": "Get GSC Data",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{baseUrl}}/seo/gsc/:postId?days=30",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "seo",
+                        "gsc",
+                        ":postId"
+                    ],
+                    "query": [
+                        {
+                            "key": "days",
+                            "value": "30"
+                        }
+                    ],
+                    "variable": [
+                        {
+                            "key": "postId",
+                            "value": "{{postId}}"
+                        }
+                    ]
+                },
+                "description": "Get Google Search Console data for a post"
+            }
+        },
+        {
+            "name": "Sync GSC Data",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Authorization",
+                        "value": "Bearer {{accessToken}}",
+                        "description": "JWT access token (required)"
+                    }
+                ],
+                "url": {
+                    "raw": "{{baseUrl}}/seo/gsc/sync?days=7",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "seo",
+                        "gsc",
+                        "sync"
+                    ],
+                    "query": [
+                        {
+                            "key": "days",
+                            "value": "7",
+                            "description": "Number of days to sync (default: 7)"
+                        }
+                    ]
+                },
+                "description": "Sync Google Search Console data (Admin only, requires authentication)"
+            },
+            "response": [
+                {
+                    "name": "Success",
+                    "status": "OK",
+                    "code": 200,
+                    "body": "{\n  \"message\": \"GSC data synced successfully\",\n  \"synced\": 150,\n  \"duration\": 5.2\n}"
+                },
+                {
+                    "name": "Unauthorized",
+                    "status": "Unauthorized",
+                    "code": 401,
+                    "body": "{\n  \"statusCode\": 401,\n  \"message\": \"Unauthorized\"\n}"
+                }
+            ]
+        },
+        {
+            "name": "Get Top Posts",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "{{baseUrl}}/seo/gsc/top-posts?limit=10&days=30",
+                    "host": [
+                        "{{baseUrl}}"
+                    ],
+                    "path": [
+                        "seo",
+                        "gsc",
+                        "top-posts"
+                    ],
+                    "query": [
+                        {
+                            "key": "limit",
+                            "value": "10",
+                            "description": "Number of posts to return (default: 10)"
+                        },
+                        {
+                            "key": "days",
+                            "value": "30",
+                            "description": "Time period in days (default: 30)"
+                        }
+                    ]
+                },
+                "description": "Get top performing posts from Google Search Console"
+            }
+        }
+    ],
+    "variable": [
+        {
+            "key": "baseUrl",
+            "value": "http://localhost:3003/api",
+            "type": "string"
+        },
+        {
+            "key": "postId",
+            "value": "123e4567-e89b-12d3-a456-426614174000",
+            "type": "string",
+            "description": "Sample post UUID - replace with actual post ID"
+        },
+        {
+            "key": "accessToken",
+            "value": "",
+            "type": "string",
+            "description": "JWT access token for authenticated requests"
+        }
+    ]
+}

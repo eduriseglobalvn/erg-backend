@@ -22,6 +22,7 @@ const config: Options = {
     'dist/modules/users/**/*.entity.js',
     'dist/modules/ai-content/**/*.entity.js',
     'dist/modules/seo/**/*.entity.js',
+    'dist/modules/recruitment/**/*.entity.js',
   ],
   entitiesTs: [
     'src/modules/access-control/**/*.entity.ts',
@@ -33,7 +34,9 @@ const config: Options = {
     'src/modules/profiles/**/*.entity.ts',
     'src/modules/users/**/*.entity.ts',
     'src/modules/ai-content/**/*.entity.ts',
+    'src/modules/ai-content/**/*.entity.ts',
     'src/modules/seo/**/*.entity.ts',
+    'src/modules/recruitment/**/*.entity.ts',
   ],
   allowGlobalContext: true,
   debug: process.env.NODE_ENV === 'development',

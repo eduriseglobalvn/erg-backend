@@ -1,89 +1,169 @@
 import { Injectable } from '@nestjs/common';
-import slugify from 'slugify';
+import { Post } from '@/modules/posts/entities/post.entity';
+// import { YoastService } from './yoast.service'; // Removed
 
-export interface SeoAnalysisResult {
-    score: number;
-    readabilityScore: number;
-    keywordDensity: number;
+export interface TitleAnalysis {
+    length: number;
+    hasKeyword: boolean;
+    suggestions: string[];
+}
+
+export interface MetaAnalysis {
+    length: number;
+    hasKeyword: boolean;
+    suggestions: string[];
+}
+
+export interface ContentAnalysis {
     wordCount: number;
+    keywordDensity: number;
+    readabilityScore: number;
+    headingStructure: {
+        h1: number;
+        h2: number;
+        h3: number;
+        valid: boolean;
+    };
+    paragraphCount: number;
+}
+
+export interface TechnicalAnalysis {
+    hasCanonical: boolean;
+    hasSchema: boolean;
+    imageAltTags: {
+        total: number;
+        withAlt: number;
+    };
+    internalLinks: number;
+    externalLinks: number;
+}
+
+export interface ComprehensiveSeoAnalysis {
+    overallScore: number;
+    titleAnalysis: TitleAnalysis;
+    metaAnalysis: MetaAnalysis;
+    contentAnalysis: ContentAnalysis;
+    technicalAnalysis: TechnicalAnalysis;
     suggestions: string[];
 }
 
 @Injectable()
 export class SeoAnalyzerService {
+
+    constructor(
+        // private readonly yoastService: YoastService // Removed
+    ) { }
+
     /**
-     * Tính điểm SEO tổng thể (0-100)
+     * Simplified analysis for backward compatibility (Synchronous wrapper)
      */
-    analyze(content: string, focusKeyword?: string): SeoAnalysisResult {
-        const cleanText = this.stripHtml(content);
-        const wordCount = cleanText.split(/\s+/).length;
-        const suggestions: string[] = [];
-        let score = 0;
+    analyze(content: string, keyword: string = ''): { score: number; readabilityScore: number; keywordDensity: number } {
+        // Simplified analysis (No longer uses Yoast Backend)
+        // Returns basic placeholders or could implement simple length check
+        return {
+            score: 0,
+            readabilityScore: 0,
+            keywordDensity: 0,
+        };
+    }
 
-        // 1. Content Length (20 points)
-        if (wordCount >= 600) score += 20;
-        else if (wordCount >= 300) score += 10;
-        else suggestions.push('Nội dung quá ngắn (dưới 300 từ). Hãy viết thêm.');
+    /**
+     * Comprehensive SEO analysis
+     */
+    analyzeComprehensive(post: Post, siteUrl: string = 'https://erg.edu.vn'): ComprehensiveSeoAnalysis {
+        // 1. Scores are now provided by Frontend (stored in Post entity)
+        // We use them directly.
+        const seoScore = post.seoScore || 0;
+        const readabilityScore = post.readabilityScore || 0;
+        const keywordDensity = post.keywordDensity || 0;
 
-        // 2. Keyword Analysis (30 points)
-        let density = 0;
-        if (focusKeyword) {
-            const lowerText = cleanText.toLowerCase();
-            const lowerKeyword = focusKeyword.toLowerCase();
-            const matches = lowerText.split(lowerKeyword).length - 1;
-            density = (matches * lowerKeyword.split(' ').length) / wordCount;
+        // 2. Technical Analysis (Manual checks for things Yoast JS might miss or we treat differently)
+        const cleanContent = post.content || '';
+        const imgRegex = /<img[^>]*>/gi;
+        const images: string[] = cleanContent.match(imgRegex) || [];
+        const imagesWithAlt = images.filter(img =>
+            img.includes('alt=') && !img.includes('alt=""') && !img.includes("alt=''")
+        ).length;
 
-            if (density >= 0.005 && density <= 0.025) {
-                score += 30; // 0.5% - 2.5% is good
-            } else if (density > 0.025) {
-                score += 10;
-                suggestions.push(`Mật độ từ khóa '${focusKeyword}' quá cao (${(density * 100).toFixed(2)}%). Có thể bị đánh dấu spam.`);
-            } else {
-                score += 10;
-                suggestions.push(`Mật độ từ khóa '${focusKeyword}' thấp (${(density * 100).toFixed(2)}%). Hãy nhắc lại từ khóa nhiều hơn.`);
-            }
-
-            // Check Heading (Simplified)
-            if (content.toLowerCase().includes(`>${lowerKeyword}<`) || content.toLowerCase().includes(`>${lowerKeyword} `)) {
-                // This is a naive check. Better regex needed for H1-H6
-                score += 5; // Bonus
-            }
-        } else {
-            suggestions.push('Chưa xác định từ khóa chính (Focus Keyword).');
+        const linkRegex = /<a\s+(?:[^>]*?\s+)?href="([^"]*)"/gi;
+        const links: string[] = [];
+        let match;
+        while ((match = linkRegex.exec(cleanContent)) !== null) {
+            links.push(match[1]);
         }
+        const internalLinks = links.filter(link => link.startsWith(siteUrl) || link.startsWith('/')).length;
+        const externalLinks = links.length - internalLinks;
 
-        // 3. Structure Analysis (25 points)
-        const headings = (content.match(/<h[1-6]/g) || []).length;
-        const images = (content.match(/<img/g) || []).length;
+        const technicalAnalysis: TechnicalAnalysis = {
+            hasCanonical: !!post.canonicalUrl,
+            hasSchema: !!post.schemaMarkup,
+            imageAltTags: {
+                total: images.length,
+                withAlt: imagesWithAlt
+            },
+            internalLinks,
+            externalLinks
+        };
 
-        if (headings >= 2) score += 15;
-        else suggestions.push('Bài viết thiếu các thẻ Heading (H2, H3) để phân chia cấu trúc.');
+        // 3. Technical Suggestions
+        const technicalSuggestions: string[] = [];
+        if (internalLinks === 0) technicalSuggestions.push('Thiếu liên kết nội bộ (Internal links).');
+        if (images.length === 0) technicalSuggestions.push('Hãy thêm ít nhất một hình ảnh minh họa.');
+        if (imagesWithAlt < images.length) technicalSuggestions.push('Hãy thêm Alt tag cho tất cả hình ảnh.');
+        if (!technicalAnalysis.hasSchema) technicalSuggestions.push('Chưa cấu hình Schema Markup.');
 
-        if (images >= 1) score += 10;
-        else suggestions.push('Bài viết nên có ít nhất 1 hình ảnh minh họa.');
+        // 4. Word Count & Heading Structure (Recalculate or extract from Yoast if needed)
+        // We'll calculate word count manually to populate the specific field
+        const cleanText = this.stripHtml(cleanContent);
+        const words = cleanText.split(/\s+/).filter(w => w.length > 0);
+        const wordCount = words.length;
 
-        // 4. Readability (Basic) (25 points)
-        // Giả lập điểm readability dựa trên độ dài câu trung bình (naive for VN)
-        const sentences = cleanText.split(/[.?!]+/).length;
-        const avgWordsPerSentence = wordCount / (sentences || 1);
-        let readabilityScore = 100;
+        const h1Count = (cleanContent.match(/<h1/gi) || []).length;
+        const h2Count = (cleanContent.match(/<h2/gi) || []).length;
+        const h3Count = (cleanContent.match(/<h3/gi) || []).length;
 
-        if (avgWordsPerSentence > 25) {
-            readabilityScore = 60;
-            suggestions.push('Nhiều câu quá dài. Hãy ngắt câu ngắn gọn hơn.');
-        } else if (avgWordsPerSentence > 20) {
-            readabilityScore = 80;
-        }
+        // Helper to check valid heading structure
+        const validHeadings = h1Count === 1; // Simplified check
 
-        score += Math.round(readabilityScore * 0.25);
+        // 5. Construct Result
+        // We defer to Yoast for the Score and Text Suggestions
 
         return {
-            score: Math.min(100, score),
-            readabilityScore,
-            keywordDensity: density,
-            wordCount,
-            suggestions,
+            overallScore: seoScore,
+            titleAnalysis: {
+                length: post.metaTitle?.length || post.title?.length || 0,
+                hasKeyword: false,
+                suggestions: []
+            },
+            metaAnalysis: {
+                length: post.metaDescription?.length || 0,
+                hasKeyword: false,
+                suggestions: []
+            },
+            contentAnalysis: {
+                wordCount,
+                keywordDensity: keywordDensity,
+                readabilityScore: readabilityScore,
+                headingStructure: {
+                    h1: h1Count,
+                    h2: h2Count,
+                    h3: h3Count,
+                    valid: validHeadings
+                },
+                paragraphCount: 0
+            },
+            technicalAnalysis,
+            suggestions: [
+                ...technicalSuggestions
+            ]
         };
+    }
+
+    /**
+     * Helper for legacy calls or internal uses
+     */
+    private analyzeComprehensiveSync(post: Post, siteUrl: string): ComprehensiveSeoAnalysis {
+        return this.analyzeComprehensive(post, siteUrl);
     }
 
     /**
@@ -92,7 +172,7 @@ export class SeoAnalyzerService {
     generateMeta(title: string, content: string): { metaTitle: string; metaDescription: string } {
         const cleanText = this.stripHtml(content);
 
-        // Meta Title: Title + Suffix (could be configurable)
+        // Meta Title: Title + Suffix
         let metaTitle = title;
         if (metaTitle.length > 60) metaTitle = metaTitle.substring(0, 57) + '...';
 
@@ -104,6 +184,6 @@ export class SeoAnalyzerService {
     }
 
     private stripHtml(html: string): string {
-        return html.replace(/<[^>]*>?/gm, '');
+        return html ? html.replace(/<[^>]*>?/gm, '') : '';
     }
 }

@@ -25,18 +25,21 @@ export class AiContentService {
             const model = genAI.getGenerativeModel({ model: modelName });
 
             const prompt = `
-        Bạn là một chuyên gia biên tập nội dung.
-        Nhiệm vụ của bạn là cải thiện nội dung sau đây dựa trên yêu cầu cụ thể.
+        Bạn là một chuyên gia biên tập nội dung SEO cao cấp tại ERG (Education Rise Global).
+        Nhiệm vụ của bạn là tối ưu hóa nội dung dựa trên yêu cầu cụ thể, đảm bảo tính chuyên nghiệp, thu hút và chuẩn SEO.
         
         NỘI DUNG GỐC:
         ${content}
         
-        YÊU CẦU CẢI THIỆN:
+        YÊU CẦU CỤ THỂ:
         ${instruction}
         
-        QUY TẮC:
-        1. Giữ nguyên định dạng (nếu là HTML hãy giữ các thẻ HTML cần thiết).
-        2. Phản hồi CHỈ bao gồm nội dung đã được cải thiện, không thêm lời chào hay giải thích.
+        QUY TẮC BẮT BUỘC:
+        1. Duy trì giọng văn chuyên nghiệp, giáo dục, truyền cảm hứng.
+        2. Giữ nguyên định dạng HTML nếu có, không làm hỏng cấu trúc thẻ.
+        3. Tuyệt đối không thêm văn bản rác, lời chào, hay giải thích (VD: "Đây là kết quả của bạn...").
+        4. Tối ưu hóa từ khóa một cách tự nhiên (không nhồi nhét).
+        5. Phản hồi CHỈ bao gồm nội dung đã xử lý.
       `;
 
             const result = await model.generateContent(prompt);

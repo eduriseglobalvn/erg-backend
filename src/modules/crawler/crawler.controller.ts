@@ -7,14 +7,18 @@ import { RssFeed } from './entities/rss-feed.entity';
 export class CrawlerController {
     constructor(private readonly crawlerService: CrawlerService) { }
 
-    @Post('rss/trigger')
-    async triggerRss(@Body('rssId') rssId: string) {
-        return this.crawlerService.triggerRssCrawl(rssId);
-    }
-
     @Get('rss/peek/:id')
+    @Get('rss/:id/peek') // Multiple routes for the same logic
     async peekRss(@Param('id') id: string) {
         return this.crawlerService.peekRss(id);
+    }
+
+    @Post('rss/trigger') // Legacy support
+    @Post('rss/sync/:id') // New RESTful way
+    @Post('rss/:id/sync') // Alternative
+    async syncRss(@Body('rssId') rssId: string, @Body('id') bodyId: string, @Param('id') paramId: string) {
+        const targetId = paramId || rssId || bodyId;
+        return this.crawlerService.triggerRssCrawl(targetId);
     }
 
 

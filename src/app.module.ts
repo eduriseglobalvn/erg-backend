@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
+import { SeoRedirectFilter } from '@/modules/seo/filters/seo-redirect.filter';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { CacheModule } from '@nestjs/cache-manager';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -17,6 +19,11 @@ import { AnalyticsModule } from '@/modules/analytics/analytics.module';
 import { SitemapModule } from '@/modules/sitemap/sitemap.module';
 import { SeoModule } from '@/modules/seo/seo.module';
 import { CrawlerModule } from '@/modules/crawler/crawler.module';
+import { RecruitmentModule } from '@/modules/recruitment/recruitment.module';
+import { NotificationsModule } from '@/modules/notifications/notifications.module';
+import { MenusModule } from '@/modules/menus/menus.module';
+import { PagesModule } from '@/modules/pages/pages.module';
+import { ReviewsModule } from '@/modules/reviews/reviews.module';
 import { SharedModule } from '@/shared/shared.module';
 
 @Module({
@@ -94,7 +101,18 @@ import { SharedModule } from '@/shared/shared.module';
     SitemapModule,
     SeoModule,
     CrawlerModule,
+    RecruitmentModule,
+    NotificationsModule,
+    MenusModule,
+    PagesModule,
+    ReviewsModule,
     SharedModule,
+  ],
+  providers: [
+    {
+      provide: APP_FILTER,
+      useClass: SeoRedirectFilter,
+    },
   ],
 })
 export class AppModule { }

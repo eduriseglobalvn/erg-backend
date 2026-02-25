@@ -12,7 +12,10 @@ import { CrawlHistory } from './entities/crawl-history.entity';
 import { Post } from '../posts/entities/post.entity';
 import { PostCategory } from '../posts/entities/post-category.entity';
 import { AiContentModule } from '../ai-content/ai-content.module';
+import { PostsModule } from '../posts/posts.module';
 import { User } from '../users/entities/user.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { SeoModule } from '../seo/seo.module';
 
 @Module({
     imports: [
@@ -27,6 +30,10 @@ import { User } from '../users/entities/user.entity';
             CrawlHistory
         ], 'mongo-connection'),
         AiContentModule,
+        PostsModule,
+
+        NotificationsModule,
+        SeoModule,
         BullModule.registerQueue({
             name: 'crawler',
         }),

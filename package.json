@@ -27,6 +27,7 @@
     "@google/generative-ai": "^0.24.1",
     "@liaoliaots/nestjs-redis": "^10.0.0",
     "@mikro-orm/core": "^6.6.3",
+    "@mikro-orm/migrations": "6.6.3",
     "@mikro-orm/mongodb": "^6.6.3",
     "@mikro-orm/mysql": "^6.6.3",
     "@mikro-orm/nestjs": "^6.1.1",
@@ -44,6 +45,7 @@
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/schedule": "^6.1.0",
+    "@nestjs/swagger": "^11.2.6",
     "argon2": "^0.44.0",
     "axios": "^1.13.4",
     "bullmq": "^5.66.5",
@@ -55,7 +57,10 @@
     "crawlee": "^3.15.3",
     "cron-parser": "^5.5.0",
     "dotenv": "^17.2.3",
+    "fastest-levenshtein": "^1.0.16",
     "geoip-lite": "^1.4.10",
+    "google-ads-api": "^23.0.0",
+    "googleapis": "^171.4.0",
     "handlebars": "^4.7.8",
     "helmet": "^8.1.0",
     "ioredis": "^5.9.1",
@@ -70,8 +75,10 @@
     "rxjs": "^7.8.1",
     "sharp": "^0.34.5",
     "slugify": "^1.6.6",
+    "swagger-ui-express": "^5.0.1",
     "ua-parser-js": "^2.0.8",
-    "uuid": "9.0.1"
+    "uuid": "9.0.1",
+    "yoastseo": "^3.5.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

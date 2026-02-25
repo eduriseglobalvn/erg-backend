@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { AiContentController } from './ai-content.controller';
@@ -14,6 +14,7 @@ import { UsersModule } from '@/modules/users/users.module';
 import { PostsModule } from '@/modules/posts/posts.module';
 import { SharedModule } from '@/shared/shared.module';
 import { SeoModule } from '@/modules/seo/seo.module';
+import { NotificationsModule } from '@/modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -22,9 +23,11 @@ import { SeoModule } from '@/modules/seo/seo.module';
       name: 'ai-content-queue',
     }),
     UsersModule,
-    PostsModule,
+
+    forwardRef(() => PostsModule),
     SharedModule,
-    SeoModule,
+    forwardRef(() => SeoModule),
+    NotificationsModule,
   ],
   controllers: [AiContentController, ApiKeyController],
   providers: [
@@ -34,6 +37,6 @@ import { SeoModule } from '@/modules/seo/seo.module';
     // 2. ĐĂNG KÝ NÓ Ở ĐÂY THÌ PROCESSOR MỚI DÙNG ĐƯỢC
     ImageGenService,
   ],
-  exports: [ApiKeyService, AiContentService],
+  exports: [ApiKeyService, AiContentService, ImageGenService],
 })
 export class AiContentModule { }

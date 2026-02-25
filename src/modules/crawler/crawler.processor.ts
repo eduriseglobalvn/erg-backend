@@ -3,7 +3,7 @@ import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { CrawlerService } from './crawler.service';
 import { InjectRepository } from '@mikro-orm/nestjs';
-import { EntityRepository } from '@mikro-orm/core';
+import { EntityRepository, EntityManager } from '@mikro-orm/core';
 import { Post } from '../posts/entities/post.entity';
 import { User } from '../users/entities/user.entity';
 import { PostCategory } from '../posts/entities/post-category.entity';
@@ -15,8 +15,16 @@ import { StorageService } from '@/shared/services/storage.service';
 import { AiContentService } from '../ai-content/services/ai-content.service';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import { PostsService } from '../posts/posts.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/entities/notification.entity';
+import { SeoTitleService } from '../seo/services/seo-title.service';
+import { SeoMetaService } from '../seo/services/seo-meta.service';
+import { SeoImageAltService } from '../seo/services/seo-image-alt.service';
+import { SeoContentService } from '../seo/services/seo-content.service';
+import { AutoLinkingService } from '../seo/services/auto-linking.service';
 
-@Processor('crawler')
+@Processor('crawler', { concurrency: 5 })
 export class CrawlerProcessor extends WorkerHost {
     private readonly logger = new Logger(CrawlerProcessor.name);
 
@@ -24,6 +32,13 @@ export class CrawlerProcessor extends WorkerHost {
         private readonly crawlerService: CrawlerService,
         private readonly storageService: StorageService,
         private readonly aiService: AiContentService,
+        private readonly postsService: PostsService,
+        private readonly notificationsService: NotificationsService,
+        private readonly seoTitleService: SeoTitleService,
+        private readonly seoMetaService: SeoMetaService,
+        private readonly seoImageAltService: SeoImageAltService,
+        private readonly seoContentService: SeoContentService,
+        private readonly autoLinkingService: AutoLinkingService,
         @InjectRepository(Post)
         private readonly postRepo: EntityRepository<Post>,
         @InjectRepository(User)
@@ -34,23 +49,46 @@ export class CrawlerProcessor extends WorkerHost {
         super();
     }
 
-    async process(job: Job<any, any, string>): Promise<any> {
+    async process(job: Job<any>): Promise<any> {
+        this.logger.log(`[JOB START] ID: ${job.id} | Name: ${job.name} | URL: ${job.data.url || 'N/A'}`);
         switch (job.name) {
             case 'crawl_rss':
                 return this.crawlerService.processRssFeed(job.data.rssId);
             case 'crawl_url':
-                return this.processUrlCrawl(job.data);
+                return await this.processUrlCrawl(job.data);
             default:
+                this.logger.warn(`[JOB UNKNOWN] ID: ${job.id} | Name: ${job.name}`);
                 this.logger.warn(`Unknown job name: ${job.name}`);
         }
     }
 
     /**
-     * Logic cào bài viết chi tiết (Strategy Pattern: Cheerio vs Playwright)
+     * Logic cào bài viết chi tiết
      */
     private async processUrlCrawl(data: any) {
-        const { url, type, rssId, targetCategoryId, autoPublish, selectorConfig } = data;
+        const { url, type, rssId, targetCategoryId, autoPublish, selectorConfig, manual } = data;
         this.logger.log(`Processing URL: ${url} (Type: ${type || 'AUTO'})`);
+
+        // Fork EM để tránh tranh chấp dữ liệu giữa các job song song
+        const em = this.postRepo.getEntityManager().fork();
+        const mongoEm = this.historyRepo.getEntityManager().fork();
+
+        // [CRITICAL FIX] Guard: Chỉ skip nếu KHÔNG phải manual VÀ bài thực sự tồn tại trong MySQL
+        if (!manual) {
+            const history = await mongoEm.findOne(CrawlHistory, { url });
+            if (history && history.postId) {
+                // Kiểm tra thực tế trong MySQL
+                const post = await em.findOne(Post, { id: history.postId, deletedAt: null });
+                if (post) {
+                    this.logger.log(`✓ URL already has valid post in MySQL. Skipping: ${url}`);
+                    return;
+                }
+            }
+        } else {
+            this.logger.log(`⚡ [MANUAL CRAWL] Forcing execution for: ${url}`);
+        }
+
+        this.logger.log(`[CRAWL BEGIN] URL: ${url}`);
 
         let title = '';
         let content = '';
@@ -60,84 +98,37 @@ export class CrawlerProcessor extends WorkerHost {
 
         try {
             if (!usePlaywright) {
-                // Use Axios to fetch raw HTML -> Handle encoding/compression better than default CheerioCrawler
-                try {
-                    const response = await axios.get(url, {
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                        }
-                    });
-                    const $ = cheerio.load(response.data);
+                const response = await axios.get(url, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                });
+                const $ = cheerio.load(response.data);
+                $('script, style, iframe, nav, header, footer, .ads, .comments, .related-posts, .menu').remove();
 
-                    // Clean unwanted elements
-                    $('script, style, iframe, nav, header, footer, .ads, .comments, .related-posts, .menu').remove();
+                title = $(selectorConfig?.titleSelector).first().text().trim() ||
+                    $('h1').first().text().trim() ||
+                    $('title').first().text().trim();
 
-                    title = $(selectorConfig?.titleSelector).first().text().trim() ||
-                        $('h1').first().text().trim() ||
-                        $('title').first().text().trim();
+                content = $(selectorConfig?.contentSelector).html() ||
+                    $('.article__body').first().html() ||
+                    $('article').first().html() ||
+                    '';
 
-                    // Heuristic: Content extraction
-                    let bestDiv = '';
-                    let maxScore = 0;
-
-                    // ... (keep scoring logic if needed or simplify to selectors)
-                    content = $(selectorConfig?.contentSelector).html() ||
-                        $('.article__body').first().html() ||
-                        $('.cms-body').first().html() ||
-                        $('article').first().html() ||
-                        $('.post-content').first().html() ||
-                        $('.entry-content').first().html() ||
-                        $('.detail-content').first().html() ||
-                        $('.content-detail').first().html() ||
-                        $('#content').first().html() ||
-                        '';
-
-                    originalThumbnail = $(selectorConfig?.thumbnailSelector || 'meta[property="og:image"]').attr('content') || '';
-
-                } catch (err) {
-                    this.logger.error(`Static crawl failed: ${err.message}`);
-                    throw err;
-                }
+                originalThumbnail = $(selectorConfig?.thumbnailSelector || 'meta[property="og:image"]').attr('content') || '';
             } else {
                 const crawler = new PlaywrightCrawler({
-                    async requestHandler({ page, request }) {
+                    async requestHandler({ page }) {
                         title = await page.locator(selectorConfig?.titleSelector || 'h1').first().innerText();
-
                         if (selectorConfig?.contentSelector) {
                             content = await page.locator(selectorConfig.contentSelector).innerHTML();
                         } else {
-                            // Playwright clean up
-                            await page.evaluate(() => {
-                                const elementsToRemove = document.querySelectorAll('script, style, iframe, nav, header, footer, .ads, .comments');
-                                elementsToRemove.forEach(el => el.remove());
-                            });
-
-                            const selectors = ['article', '.post-content', '.entry-content', '#content'];
-                            let found = false;
-                            for (const sel of selectors) {
-                                if (await page.locator(sel).count() > 0) {
-                                    content = await page.locator(sel).first().innerHTML();
-                                    found = true;
+                            const sel = ['article', '.post-content', '.entry-content', '#content'];
+                            for (const s of sel) {
+                                if (await page.locator(s).count() > 0) {
+                                    content = await page.locator(s).first().innerHTML();
                                     break;
                                 }
-                            }
-                            if (!found) {
-                                content = await page.evaluate(() => {
-                                    const divs = document.querySelectorAll('div, section, article');
-                                    let maxP = 0;
-                                    let bestHtml = '';
-                                    divs.forEach(div => {
-                                        const pCount = div.querySelectorAll('p').length;
-                                        let bonus = 0;
-                                        if (div.tagName.toLowerCase() === 'article' || div.className.includes('content')) bonus = 5;
-
-                                        if ((pCount + bonus) > maxP) {
-                                            maxP = pCount + bonus;
-                                            bestHtml = div.innerHTML;
-                                        }
-                                    });
-                                    return bestHtml;
-                                });
                             }
                         }
                         originalThumbnail = await page.getAttribute('meta[property="og:image"]', 'content') || '';
@@ -149,80 +140,131 @@ export class CrawlerProcessor extends WorkerHost {
             if (!title) throw new Error('Empty title found');
             if (!content) throw new Error('Empty content found');
 
-            // Final cleaning of content
+            // Clean content
             const $clean = cheerio.load(content);
-            $clean('script, style, iframe').remove(); // Double check
-            $clean('a').each((i, el) => { $clean(el).removeAttr('href'); }); // Remove links to avoid navigating away
+            $clean('script, style, iframe').remove();
+            $clean('a').each((i, el) => { $clean(el).removeAttr('href'); });
             content = $clean.html();
 
-            this.logger.log(`Processing images for: ${title}`);
-            const processedContent = await this.processImages(content);
+            let processedContent = await this.processImages(content);
             const thumbnailUrl = originalThumbnail ? await this.downloadAndUploadImage(originalThumbnail, 'thumbnails') : null;
 
-            this.logger.log(`Generating AI Metadata for: ${title}`);
-            const seoData = await this.generateSeoMetadata(title, processedContent);
+            const admin = await em.findOne(User, { email: 'admin@erg.edu.vn' }) || await em.findOne(User, { id: { $ne: null } } as any);
+            if (!admin) throw new Error('Admin user not found for AI optimization');
 
-            this.logger.log(`Crawled success: ${title}`);
+            // [BEST-PRACTICE] Use AI SEO Services for crawl optimization
+            let seoData = { metaTitle: title, metaDescription: '', excerpt: '', keywords: '' };
+            try {
+                // 1. Generate SEO-optimized Title
+                const titles = await this.seoTitleService.generateTitles(title, processedContent, admin);
+                seoData.metaTitle = titles[0]?.title || title;
 
-            const em = this.postRepo.getEntityManager();
-            const admin = await this.userRepo.findOne({ email: 'admin@erg.edu.vn' }) || await this.userRepo.findOne({ id: { $ne: null } } as any);
+                // 2. Generate SEO-optimized Meta Description
+                const metas = await this.seoMetaService.generateMetaDescriptions(title, processedContent, admin);
+                seoData.metaDescription = metas[0]?.description || '';
+                seoData.excerpt = seoData.metaDescription;
 
-            const post = this.postRepo.create({
+                // 3. Generate Alt Texts for all images automatically
+                const altResults = await this.seoImageAltService.generateAltTexts(processedContent, title, admin);
+
+                // Patch content with suggested alt texts
+                const $alt = cheerio.load(processedContent);
+                altResults.forEach(res => {
+                    $alt(`img[src="${res.imageUrl}"]`).attr('alt', res.suggestedAlt);
+                });
+                processedContent = $alt.html();
+
+                this.logger.log(`[AI SEO COMPLETED] Optimized Title, Meta and ${altResults.length} Alt texts for: ${url}`);
+
+                // 4. Advanced Content Optimization: Paraphrasing for Uniqueness
+                // This makes crawled content unique and better structured
+                processedContent = await this.seoContentService.paraphraseForSeo(processedContent, title, admin);
+                processedContent = await this.seoContentService.optimizeHtmlStructure(processedContent);
+
+                this.logger.log(`[AI SEO COMPLETED] Optimized Title, Meta and ${altResults.length} Alt texts for: ${url}`);
+            } catch (aiError) {
+                this.logger.warn(`[AI SEO PARTIAL ERROR] ${aiError.message} - Using fallbacks`);
+                const plainText = processedContent.replace(/<[^>]*>?/gm, '');
+                seoData.excerpt = plainText.substring(0, 200) + '...';
+                seoData.metaDescription = seoData.excerpt;
+            }
+
+            const post = await this.postsService.create({
                 title,
-                slug: this.slugify(title),
+                slug: this.slugify(title) + '-' + Math.random().toString(36).substring(2, 6),
                 content: processedContent,
                 excerpt: seoData.excerpt,
-                thumbnailUrl: thumbnailUrl,
+                thumbnailUrl: thumbnailUrl || undefined,
                 status: autoPublish ? PostStatus.PUBLISHED : PostStatus.DRAFT,
-                category: targetCategoryId ? em.getReference(PostCategory, targetCategoryId) : undefined,
-                author: admin ? em.getReference(User, admin.id) : em.getReference(User, '1' as any),
-                createdBy: admin ? em.getReference(User, admin.id) : em.getReference(User, '1' as any),
-                isPublished: autoPublish,
-                publishedAt: autoPublish ? new Date() : undefined,
+                categoryId: targetCategoryId,
                 metaTitle: seoData.metaTitle,
                 metaDescription: seoData.metaDescription,
                 keywords: seoData.keywords,
-                createdAt: new Date(),
-                updatedAt: new Date(),
-            } as any);
+                focusKeyword: title.split(' ').slice(0, 3).join(' '),
+                // Pass AI-related data for notification detection
+                isCreatedByAI: false,
+                aiPrompt: `Crawled from: ${url}`,
+                aiJobId: data.jobId,
+            } as any, admin);
 
-            await em.persistAndFlush(post);
-            await this.saveHistory(url, rssId, 'SUCCESS', undefined, post.id);
+            // 5. Auto-linking keywords (Post-creation SEO Polish)
+            try {
+                const linkResult = await this.autoLinkingService.applyAutoLinks(post.content || '', post.id);
+                post.content = linkResult.updatedContent;
+                await em.flush();
+                this.logger.log(`[AUTO-LINK] Applied ${linkResult.linksAdded} links to Post: ${post.id}`);
+            } catch (linkError) {
+                this.logger.warn(`[AUTO-LINK FAILED] ${linkError.message}`);
+            }
+
+            await this.saveHistory(mongoEm, url, rssId, 'SUCCESS', undefined, post.id);
+            this.logger.log(`✅ [CRAWL SUCCESS] URL: ${url} | Post ID: ${post.id}`);
 
         } catch (error) {
-            this.logger.error(`Crawl failed for ${url}: ${error.message}`);
-            await this.saveHistory(url, rssId, 'FAILED', error.message);
-        }
+            this.logger.error(`❌ [CRAWL FAILED] URL: ${url} | Error: ${error.message}`);
+            this.logger.error(`[CRAWL ERROR STACK] ${error.stack}`);
+            await this.saveHistory(mongoEm, url, rssId, 'FAILED', error.message);
 
+            // Gửi thông báo lỗi
+            const em = this.postRepo.getEntityManager();
+            const admin = await em.findOne(User, { email: 'admin@erg.edu.vn' });
+            if (admin) {
+                await this.notificationsService.create({
+                    userId: admin.id,
+                    type: NotificationType.CRAWL_FAILED,
+                    title: 'Cào bài viết thất bại',
+                    message: `Không thể cào: ${url}. Lỗi: ${error.message}`,
+                    metadata: {
+                        url,
+                        rssId,
+                        error: error.message,
+                    },
+                });
+            }
+        }
     }
 
-    private async saveHistory(url: string, sourceId: string | undefined | null, status: 'SUCCESS' | 'FAILED', errorMsg?: string, postId?: string) {
+    private async saveHistory(mongoEm: any, url: string, sourceId: string | undefined | null, status: 'SUCCESS' | 'FAILED', errorMsg?: string, postId?: string) {
         if (!url) return;
         try {
-            let history = await this.historyRepo.findOne({ url });
+            let history = await mongoEm.findOne(CrawlHistory, { url });
             if (!history) {
-                history = this.historyRepo.create({
+                history = mongoEm.create(CrawlHistory, {
                     url,
                     sourceId: sourceId || undefined,
-                    status: status as any,
+                    status,
                     errorMessage: errorMsg,
                     postId,
                     crawledAt: new Date(),
-                    createdAt: new Date(),
-                    updatedAt: new Date(),
                 });
             } else {
                 history.status = status;
                 history.errorMessage = errorMsg;
                 if (postId) history.postId = postId;
                 history.crawledAt = new Date();
-                // Update sourceId if we have it now
-                if (sourceId && !history.sourceId) {
-                    history.sourceId = sourceId;
-                }
+                if (sourceId) history.sourceId = sourceId;
             }
-            await this.historyRepo.getEntityManager().persistAndFlush(history);
-            this.logger.log(`History saved for ${url} - Status: ${status} - PostID: ${postId}`);
+            await mongoEm.persistAndFlush(history);
         } catch (e) {
             this.logger.error(`Failed to save history for ${url}: ${e.message}`);
         }
@@ -261,9 +303,8 @@ export class CrawlerProcessor extends WorkerHost {
     /**
      * Dùng Gemini AI để tạo SEO Meta
      */
-    private async generateSeoMetadata(title: string, content: string) {
-        const admin = await this.userRepo.findOne({ id: { $ne: null } } as any);
-        if (!admin) return { metaTitle: title, metaDescription: '', excerpt: '', keywords: '' };
+    private async generateSeoMetadata(title: string, content: string, user?: User) {
+        if (!user) return { metaTitle: title, metaDescription: '', excerpt: '', keywords: '' };
 
         const plainText = content.replace(/<[^>]*>?/gm, '').substring(0, 2000);
         const instruction = `Dựa trên tiêu đề "${title}" và nội dung sau, hãy tạo dữ liệu SEO chuẩn.
@@ -271,8 +312,7 @@ export class CrawlerProcessor extends WorkerHost {
         Lưu ý: Không giải thích gì thêm, chỉ trả về JSON raw.`;
 
         try {
-            const result = await this.aiService.refineText(plainText, instruction, admin);
-            // Parse JSON từ AI
+            const result = await this.aiService.refineText(plainText, instruction, user);
             const cleanJson = result.replace(/```json/g, '').replace(/```/g, '').trim();
             return JSON.parse(cleanJson);
         } catch (error) {

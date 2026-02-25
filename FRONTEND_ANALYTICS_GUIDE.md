@@ -15,7 +15,6 @@ Hệ thống Insight giúp theo dõi hành vi người dùng, lượt xem bài v
 Gọi API này ngay khi trang vừa load xong (`useEffect` hoặc `onMounted`).
 
 - **Endpoint**: `POST /api/insight/session/begin`
-- **Body**:
 ```json
 {
   "url": "https://erg.edu.vn/posts/hoc-ai-can-ban", // URL hiện tại
