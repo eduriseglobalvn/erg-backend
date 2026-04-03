@@ -1,7 +1,34 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@mikro-orm/nestjs';
-import { EntityRepository } from '@mikro-orm/core';
-import { Notification, NotificationType, NotificationStatus } from './entities/notification.entity';
+import { EntityRepository, EntityManager } from '@mikro-orm/core';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import {
+    Notification,
+    NotificationType,
+    NotificationStatus,
+    NotificationPriority,
+    NotificationChannel
+} from './entities/notification.entity';
+import { User } from '@/modules/users/entities/user.entity';
+
+export interface CreateNotificationDto {
+    userId: string;
+    type: NotificationType;
+    title: string;
+    message: string;
+    priority?: NotificationPriority;
+    channel?: NotificationChannel;
+    metadata?: any;
+    actionUrl?: string;
+    actions?: any;
+    groupKey?: string;
+    source?: string;
+    actorId?: string;
+    actorName?: string;
+    expiresAt?: Date;
+}
+
+import { SseService } from '@/shared/queue-monitor/sse.service';
 
 @Injectable()
 export class NotificationsService {
@@ -10,27 +37,77 @@ export class NotificationsService {
     constructor(
         @InjectRepository(Notification, 'mongo-connection')
         private readonly notificationRepo: EntityRepository<Notification>,
+        private readonly em: EntityManager,
+        private readonly sseService: SseService,
     ) { }
 
     /**
-     * Tạo thông báo mới
+     * Tạo thông báo mới cho một user
      */
-    async create(data: {
-        userId: string;
-        type: NotificationType;
-        title: string;
-        message: string;
-        metadata?: any;
-    }): Promise<Notification> {
+    async create(data: CreateNotificationDto): Promise<Notification> {
         const notification = this.notificationRepo.create({
             ...data,
             status: NotificationStatus.UNREAD,
+            priority: data.priority || NotificationPriority.LOW,
+            channel: data.channel || NotificationChannel.BOTH,
         } as any);
 
         await this.notificationRepo.getEntityManager().persistAndFlush(notification);
         this.logger.log(`Created notification for user ${data.userId}: ${data.title}`);
 
+        // Push real-time via SSE
+        this.sseService.emitToUser(data.userId, 'notification', notification);
+
         return notification;
+    }
+
+    /**
+     * Tạo thông báo cho toàn bộ Admin
+     */
+    async createForAdmins(data: Omit<CreateNotificationDto, 'userId'>): Promise<void> {
+        // Find all users with admin role from MySQL
+        const admins = await this.em.find(User, { roles: { name: 'admin' } }, { populate: ['roles'] });
+
+        if (admins.length === 0) {
+            this.logger.warn('No admin users found to send notifications to.');
+            return;
+        }
+
+        for (const admin of admins) {
+            const notification = this.notificationRepo.create({
+                ...data,
+                userId: admin.id,
+                status: NotificationStatus.UNREAD,
+                priority: data.priority || NotificationPriority.LOW,
+                channel: data.channel || NotificationChannel.BOTH,
+            } as any);
+            this.notificationRepo.getEntityManager().persist(notification);
+        }
+
+        await this.notificationRepo.getEntityManager().flush();
+        this.logger.log(`Created notifications for ${admins.length} admins: ${data.title}`);
+
+        // Push real-time to all admins via SSE
+        this.sseService.emitToAdmins('notification', data);
+    }
+
+    /**
+     * Cron 3h sáng — xóa đã đọc >30 ngày
+     */
+    @Cron(CronExpression.EVERY_DAY_AT_3AM)
+    async cleanupExpiredNotifications() {
+        this.logger.log('Running cleanup of old read notifications...');
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+        const count = await this.notificationRepo.nativeDelete({
+            status: NotificationStatus.READ,
+            readAt: { $lt: thirtyDaysAgo }
+        } as any);
+
+        if (count > 0) {
+            this.logger.log(`Cleaned up ${count} old read notifications.`);
+        }
     }
 
     /**
@@ -49,6 +126,36 @@ export class NotificationsService {
         const unreadCount = await this.countUnread(userId);
 
         return { items, total, unreadCount };
+    }
+
+    /**
+     * Lấy theo Type
+     */
+    async findByType(userId: string, type: NotificationType, limit: number = 20, offset: number = 0) {
+        return this.notificationRepo.findAndCount(
+            { userId, type },
+            { limit, offset, orderBy: { createdAt: 'DESC' } }
+        );
+    }
+
+    /**
+     * Lấy theo Source
+     */
+    async findBySource(userId: string, source: string, limit: number = 20, offset: number = 0) {
+        return this.notificationRepo.findAndCount(
+            { userId, source },
+            { limit, offset, orderBy: { createdAt: 'DESC' } }
+        );
+    }
+
+    /**
+     * Lấy theo GroupKey
+     */
+    async findByGroup(userId: string, groupKey: string, limit: number = 20, offset: number = 0) {
+        return this.notificationRepo.findAndCount(
+            { userId, groupKey },
+            { limit, offset, orderBy: { createdAt: 'DESC' } }
+        );
     }
 
     /**
@@ -84,6 +191,18 @@ export class NotificationsService {
     }
 
     /**
+     * Xoá tất cả đã đọc
+     */
+    async deleteAllRead(userId: string): Promise<number> {
+        const count = await this.notificationRepo.nativeDelete({
+            userId,
+            status: NotificationStatus.READ,
+        } as any);
+
+        return count;
+    }
+
+    /**
      * Đếm số thông báo chưa đọc
      */
     async countUnread(userId: string): Promise<number> {
@@ -94,7 +213,7 @@ export class NotificationsService {
     }
 
     /**
-     * Xóa thông báo
+     * Xóa thông báo cụ thể
      */
     async delete(id: string, userId: string): Promise<boolean> {
         const notification = await this.notificationRepo.findOne({ id, userId } as any);

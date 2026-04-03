@@ -2,12 +2,17 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { MailerService } from '@nestjs-modules/mailer';
 import { Logger } from '@nestjs/common';
+import { NotificationsService } from '@/modules/notifications/notifications.service';
+import { NotificationType, NotificationPriority } from '@/modules/notifications/entities/notification.entity';
 
 @Processor('mail_queue')
 export class MailProcessor extends WorkerHost {
   private readonly logger = new Logger(MailProcessor.name);
 
-  constructor(private readonly mailerService: MailerService) {
+  constructor(
+    private readonly mailerService: MailerService,
+    private readonly notificationsService: NotificationsService,
+  ) {
     super();
   }
 
@@ -24,6 +29,17 @@ export class MailProcessor extends WorkerHost {
       }
     } catch (error) {
       this.logger.error(`[MAIL] Gửi thất bại:`, error);
+
+      try {
+        await this.notificationsService.createForAdmins({
+          type: NotificationType.MAIL_FAILED,
+          title: 'Lỗi gửi Email',
+          message: `Không thể gửi email tới ${job.data?.email}. Lỗi: ${error.message}`,
+          priority: NotificationPriority.HIGH,
+          metadata: { email: job.data?.email, error: error.message },
+        });
+      } catch (e) { }
+
       throw error; // Ném lỗi để BullMQ biết và retry
     }
   }

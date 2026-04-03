@@ -1,10 +1,11 @@
-import { Entity, Property, ManyToOne } from '@mikro-orm/core';
+import { Entity, Property, ManyToOne, OneToMany, Collection, Cascade } from '@mikro-orm/core';
 import { BaseEntity } from '@/core/base/base.entity';
-import { Course } from '@/modules/courses/entities/course.entity';
+import type { Course } from '@/modules/courses/entities/course.entity';
+import type { CourseLesson } from './course-lesson.entity';
 
 @Entity({ tableName: 'course_syllabus' })
 export class CourseSyllabus extends BaseEntity {
-  @ManyToOne(() => Course)
+  @ManyToOne('Course')
   course!: Course;
 
   @Property()
@@ -15,4 +16,9 @@ export class CourseSyllabus extends BaseEntity {
 
   @Property({ type: 'text', nullable: true })
   topicDescription?: string; // Mô tả giáo trình buổi đó dạy gì
+
+  @OneToMany('CourseLesson', (lesson: any) => lesson.syllabus, {
+    cascade: [Cascade.ALL],
+  })
+  lessons = new Collection<CourseLesson>(this);
 }

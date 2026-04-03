@@ -5,6 +5,8 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@mikro-orm/nestjs';
 import { EntityRepository } from '@mikro-orm/core';
 import { User } from '@/modules/users/entities/user.entity';
+import { UserPermission } from '@/modules/access-control/entities/user-permission.entity';
+import { EntityManager } from '@mikro-orm/core';
 
 type JwtPayload = {
   sub: string;
@@ -18,6 +20,7 @@ export class AccessTokenStrategy extends PassportStrategy(Strategy, 'jwt') {
     config: ConfigService,
     @InjectRepository(User)
     private readonly userRepo: EntityRepository<User>,
+    private readonly em: EntityManager,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -40,6 +43,21 @@ export class AccessTokenStrategy extends PassportStrategy(Strategy, 'jwt') {
     const permissions = new Set<string>();
     user.roles.getItems().forEach((role) => {
       role.permissions.getItems().forEach((p) => permissions.add(p.name));
+    });
+
+    // Apply UserPermission overrides (GRANT/DENY)
+    const userPermissions = await this.em.find(
+      UserPermission,
+      { user: user.id },
+      { populate: ['permission'] }
+    );
+    userPermissions.forEach(override => {
+      if (override.action === 'GRANT') {
+        permissions.add(override.permission.name);
+      }
+      if (override.action === 'DENY') {
+        permissions.delete(override.permission.name);
+      }
     });
 
     // Return extended user object (Plain object to avoid MikroORM internal type leak)

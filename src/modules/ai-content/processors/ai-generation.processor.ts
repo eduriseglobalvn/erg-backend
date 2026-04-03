@@ -3,21 +3,21 @@ import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { ApiKeyService } from '../services/api-key.service';
 import { StorageService } from '@/shared/services/storage.service';
-import { ImageGenService } from '../services/image-gen.service';
+import { AiImageService } from '../services/ai-image.service';
 import { AiContentService } from '../services/ai-content.service';
 import { SeoAnalyzerService } from '@/modules/seo/services/seo-analyzer.service';
 import { ConfigService } from '@nestjs/config';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+
 import { v4 as uuidv4 } from 'uuid';
 import { EntityManager } from '@mikro-orm/core';
 import slugify from 'slugify';
-import { PostsService } from '@/modules/posts/posts.service';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
-import { NotificationType } from '@/modules/notifications/entities/notification.entity';
+import { NotificationType, NotificationPriority } from '@/modules/notifications/entities/notification.entity';
 import { SeoTitleService } from '@/modules/seo/services/seo-title.service';
 import { SeoMetaService } from '@/modules/seo/services/seo-meta.service';
 import { SeoImageAltService } from '@/modules/seo/services/seo-image-alt.service';
 import { AutoLinkingService } from '@/modules/seo/services/auto-linking.service';
+import { PostGenerationType, POST_TEMPLATES } from '../templates/post-generation.template';
 
 import { Post } from '@/modules/posts/entities/post.entity';
 import { PostCategory } from '@/modules/posts/entities/post-category.entity';
@@ -27,6 +27,11 @@ import { PostStatus } from '@/shared/enums/app.enum';
 // [UPDATE 1] Định nghĩa Style chuẩn cho ảnh Blog (Giúp ảnh nhìn thật, không bị hoạt hình)
 const IMAGE_STYLE_SUFFIX = ", photorealistic, cinematic lighting, 8k resolution, highly detailed, depth of field, professional photography, soft natural light --no text";
 
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
+import { SchemaMarkupService } from '@/modules/seo/services/schema-markup.service';
+import { Inject } from '@nestjs/common';
+
 @Processor('ai-content-queue')
 export class AiGenerationProcessor extends WorkerHost {
   private readonly logger = new Logger(AiGenerationProcessor.name);
@@ -34,17 +39,18 @@ export class AiGenerationProcessor extends WorkerHost {
   constructor(
     private apiKeyService: ApiKeyService,
     private storageService: StorageService,
-    private imageGenService: ImageGenService,
+    private aiImageService: AiImageService,
     private aiContentService: AiContentService,
     private seoAnalyzerService: SeoAnalyzerService,
     private configService: ConfigService,
     private readonly em: EntityManager,
-    private readonly postsService: PostsService,
+    private readonly schemaMarkupService: SchemaMarkupService,
     private readonly notificationsService: NotificationsService,
     private readonly seoTitleService: SeoTitleService,
     private readonly seoMetaService: SeoMetaService,
     private readonly seoImageAltService: SeoImageAltService,
     private readonly autoLinkingService: AutoLinkingService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {
     super();
   }
@@ -61,93 +67,112 @@ export class AiGenerationProcessor extends WorkerHost {
     }
   }
 
+  private parseAiResponse(raw: string): any {
+    try {
+      let clean = raw.replace(/```json|```/g, '').trim();
+      clean = clean.replace(/,\s*([\]}])/g, '$1');
+      return JSON.parse(clean);
+    } catch (e) {
+      this.logger.error(`AI JSON Parse Error. Raw: ${raw.substring(0, 100)}...`);
+      try {
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) return JSON.parse(jsonMatch[0].replace(/,\s*([\]}])/g, '$1'));
+      } catch (e2) { }
+      throw new Error(`AI Response JSON Syntax Error: ${e.message}`);
+    }
+  }
+
+  private processContentWithTOC(content: string): { content: string; toc: any[] } {
+    if (!content) return { content: '', toc: [] };
+    const toc: any[] = [];
+    const headerRegex = /<(h[23])([^>]*)>(.*?)<\/\1>/gi;
+    let newContent = content.replace(headerRegex, (match, tag, attrs, text) => {
+      const idMatch = attrs.match(/id=["']([^"']*)["']/);
+      let id = idMatch ? idMatch[1] : null;
+      const plainText = text.replace(/<[^>]*>/g, '').trim();
+      if (!id) {
+        id = slugify(plainText, { lower: true, strict: true }) || `heading-${Math.random().toString(36).substr(2, 5)}`;
+        attrs = attrs.trim() === '' ? ` id="${id}"` : ` id="${id}"` + attrs;
+      }
+      toc.push({ id, text: plainText, level: tag === 'h2' ? 2 : 3 });
+      return `<${tag}${attrs}>${text}</${tag}>`;
+    });
+    return { content: newContent, toc };
+  }
+
   private async handleRefineContent(job: Job<any>): Promise<any> {
     const { content, instruction, userId } = job.data;
     const em = this.em.fork();
-
     try {
       const user = em.getReference(User, userId);
       const refinedText = await this.aiContentService.refineText(content, instruction, user);
-
       await job.updateProgress(100);
-
-      return {
-        refinedContent: refinedText,
-        status: 'completed'
-      };
+      await this.notificationsService.create({
+        userId,
+        type: NotificationType.AI_REFINE_COMPLETED,
+        title: 'Tinh chỉnh nội dung AI thành công',
+        message: 'Nội dung của bạn đã được refine xong.',
+        metadata: { jobId: job.id },
+      });
+      return { refinedContent: refinedText, status: 'completed' };
     } catch (error) {
       this.logger.error(`Refine Job Failed: ${error.message}`);
+      await this.notificationsService.create({
+        userId,
+        type: NotificationType.AI_REFINE_FAILED,
+        title: 'Tinh chỉnh nội dung AI thất bại',
+        message: `Lỗi: ${error.message}`,
+        priority: NotificationPriority.HIGH,
+        metadata: { jobId: job.id, error: error.message },
+      });
       throw error;
     }
   }
 
   private async handleGeneratePost(job: Job<any>): Promise<any> {
     const em = this.em.fork();
-    let currentApiKey = '';
-    const { topic, userId, categoryId } = job.data;
+    const { topic, userId, categoryId, template: templateType = PostGenerationType.INFORMATIVE } = job.data;
 
     try {
-      this.logger.log(`[Job ${job.id}] Processing Topic: ${topic}`);
+      this.logger.log(`[Job ${job.id}] Processing Topic: ${topic} with template: ${templateType}`);
 
       // 1. Lấy dữ liệu
       const user = em.getReference(User, userId);
       const category = await em.findOne(PostCategory, { id: categoryId } as any);
       if (!category) throw new Error('Category not found');
 
-      // 2. Lấy Key
-      const apiKeyEntity = await this.apiKeyService.getAvailableKey(user);
-      currentApiKey = apiKeyEntity.key;
-
-      // 3. Gọi Gemini tạo nội dung
-      const modelName = this.configService.get<string>('GEMINI_MODEL') || 'gemini-3-flash-preview';
-      const genAI = new GoogleGenerativeAI(currentApiKey);
-      const model = genAI.getGenerativeModel({ model: modelName });
-
-      // [UPDATE 2] PROMPT NÂNG CAO: Tách biệt ngôn ngữ (Việt) và Image Prompt (Anh)
+      // 2. Load Template
+      const template = POST_TEMPLATES[templateType as PostGenerationType] || POST_TEMPLATES[PostGenerationType.INFORMATIVE];
       const prompt = `
-          Bạn là một Senior Content Writer và Art Director chuyên nghiệp.
+          ${template.systemPrompt}
           
           NHIỆM VỤ:
-          Viết một bài blog chuyên sâu, giàu thông tin và chuẩn SEO về chủ đề: "${topic}". 
-          Đối tượng độc giả là học sinh, sinh viên và phụ huynh tại Việt Nam quan tâm đến giáo dục quốc tế, kỹ năng số và công nghệ.
+          ${template.userPromptTemplate.replace('{keyword}', topic)}
           
-          QUY TẮC NGÔN NGỮ (QUAN TRỌNG NHẤT):
-          1.  **Nội dung bài viết (Title, Excerpt, HTML):** Viết hoàn toàn bằng **TIẾNG VIỆT**, giọng văn truyền cảm hứng, chuyên nghiệp.
-          2.  **Mô tả hình ảnh (Prompt trong thẻ placeholder):** Viết hoàn toàn bằng **TIẾNG ANH (English)** để AI vẽ ảnh.
+          QUY TẮC NGÔN NGỮ:
+          1. Nội dung bài viết (Title, Summary, HTML): Viết hoàn toàn bằng TIẾNG VIỆT.
+          2. Mô tả hình ảnh (Prompt): Viết hoàn toàn bằng TIẾNG ANH (English).
           
           YÊU CẦU SEO & CẤU TRÚC:
-          - Sử dụng các thẻ Heading (h2, h3) chứa từ khóa liên quan một cách tự nhiên.
-          - Nội dung giàu thông tin (giá trị thực cho người đọc), độ dài khoảng 800-1200 từ.
-          - Các đoạn văn ngắn gọn, dễ đọc.
-          
-          YÊU CẦU VỀ HÌNH ẢNH (ART DIRECTION):
-          - Viết prompt chi tiết (Subject + Action + Background + Lighting).
-          - Ví dụ: "A modern digital classroom in Vietnam, students using tablets, bright daylight, high-tech atmosphere, photorealistic".
+          - Sử dụng các thẻ Heading (h2, h3) chuẩn.
+          - Nội dung chi tiết, độ dài khoảng 1000-1500 từ.
+          - Chèn <image-placeholder prompt="..." /> ở vị trí thích hợp.
 
-          YÊU CẦU CẤU TRÚC JSON OUTPUT:
-          {
-            "title": "Tiêu đề tiếng Việt chuẩn SEO, giật tít hấp dẫn",
-            "excerpt": "Đoạn sapo tiếng Việt ngắn 2-3 câu",
-            "thumbnailPrompt": "Mô tả ảnh nền (Hero Image) thu hút cho bài viết bằng TIẾNG ANH",
-            "tableOfContents": [
-               { "id": "slug-muc-1", "title": "1. Tiêu đề mục 1", "level": 2 }
-            ],
-            "htmlContent": "Nội dung HTML tiếng Việt. Các thẻ <h2> phải có id khớp với tableOfContents. Sau mỗi phần quan trọng, chèn thẻ <image-placeholder prompt='Mô tả ảnh bằng TIẾNG ANH ở đây...' />."
-          }
+          YÊU CẦU JSON:
+          ${template.formatInstructions}
+          Bổ sung thêm:
+          - thumbnailPrompt: Mô tả ảnh nền bằng TIẾNG ANH.
+          - excerpt: Đoạn sapo tiếng Việt ngắn.
+          - tableOfContents: array { id, title, level }.
       `;
 
-      const result = await model.generateContent(prompt);
-      const cleanJson = result.response.text().replace(/```json|```/g, '').trim();
+      const rawResult = await this.aiContentService.generateWithFallback(prompt, user, { maxTokens: 8192 });
+      const aiData = this.parseAiResponse(rawResult);
 
-      // Log usage after success
-      await this.apiKeyService.logUsage(apiKeyEntity.id);
-
-      let aiData;
-      try {
-        aiData = JSON.parse(cleanJson);
-      } catch (e) {
-        throw new Error('AI Response JSON Syntax Error');
-      }
+      // Đồng bộ hóa các trường (AI có thể trả về content thay vì htmlContent tùy template)
+      if (!aiData.htmlContent && aiData.content) aiData.htmlContent = aiData.content;
+      if (!aiData.excerpt && aiData.summary) aiData.excerpt = aiData.summary;
+      if (!aiData.excerpt && aiData.description) aiData.excerpt = aiData.description;
 
       await job.updateProgress(40);
 
@@ -156,16 +181,18 @@ export class AiGenerationProcessor extends WorkerHost {
       let thumbnailUrl: string | null = null;
 
       // A. Tạo Thumbnail (Hero Image)
-      if (aiData.thumbnailPrompt) {
-        try {
-          const finalThumbPrompt = `${aiData.thumbnailPrompt} ${IMAGE_STYLE_SUFFIX}`;
-          const thumbBuffer = await this.imageGenService.generateImage(finalThumbPrompt);
-          const thumbFileName = `posts/${postSlug}/thumbnail-${uuidv4().slice(0, 4)}`;
-          thumbnailUrl = await this.storageService.processAndUpload(thumbBuffer, 'posts', thumbFileName);
-        } catch (err) {
-          this.logger.error(`Thumbnail Gen Failed: ${err.message}`);
+      const thumbnailPromise = async () => {
+        if (aiData.thumbnailPrompt) {
+          try {
+            const finalThumbPrompt = `${aiData.thumbnailPrompt} ${IMAGE_STYLE_SUFFIX} `;
+            const thumbBuffer = await this.aiImageService.generateImage(finalThumbPrompt, user, { width: 1200, height: 630, quality: 'standard' });
+            const thumbFileName = `posts/${postSlug}/thumbnail-${uuidv4().slice(0, 4)}`;
+            thumbnailUrl = await this.storageService.processAndUpload(thumbBuffer, 'posts', thumbFileName);
+          } catch (err) {
+            this.logger.error(`Thumbnail Gen Failed: ${err.message}`);
+          }
         }
-      }
+      };
 
       // B. Xử lý ảnh trong Content (LIMIT 4 ẢNH)
       let processedHtml = aiData.htmlContent;
@@ -180,39 +207,40 @@ export class AiGenerationProcessor extends WorkerHost {
         processedHtml = processedHtml.replace(matches[i][0], '');
       }
 
-      // Xử lý song song hoặc tuần tự
-      for (const match of imagesToProcess) {
-        const originalTag = match[0];
-        let imagePrompt = match[1]; // Prompt gốc từ Gemini (Tiếng Anh)
+      // Xử lý song song (Promise.all) — 4 ảnh chạy đồng thời
+      const contentImagesPromise = async () => {
+        const imageResults = await Promise.all(
+          imagesToProcess.map(async (match) => {
+            const originalTag = match[0];
+            const imagePrompt = match[1];
 
-        try {
-          // [UPDATE 3] Cộng thêm Style Suffix để ảnh đẹp hơn
-          const finalPrompt = `${imagePrompt} ${IMAGE_STYLE_SUFFIX}`;
+            try {
+              const finalPrompt = `${imagePrompt} ${IMAGE_STYLE_SUFFIX}`;
+              const imgBuffer = await this.aiImageService.generateImage(finalPrompt, user, { width: 1200, height: 630, quality: 'standard' });
+              const fileName = `posts/${postSlug}/image-${uuidv4().slice(0, 4)}`;
+              const publicUrl = await this.storageService.processAndUpload(imgBuffer, 'posts', fileName);
+              const altText = await this.seoImageAltService.generateSingleAltText(processedHtml, topic, publicUrl, user);
+              const imgHtml = `
+              <figure class="my-8">
+                <img src="${publicUrl}" alt="${altText}" title="${aiData.title}" class="w-full rounded-xl shadow-lg border border-gray-100" loading="lazy" />
+                <figcaption class="text-center text-sm text-gray-500 mt-3 italic font-medium">${altText}</figcaption>
+              </figure>
+            `;
+              return { originalTag, imgHtml };
+            } catch (err) {
+              this.logger.error(`Image Gen Failed (${imagePrompt}): ${err.message}`);
+              return { originalTag, imgHtml: '' };
+            }
+          })
+        );
 
-          // A. Worker AI vẽ (nhận Buffer)
-          const imgBuffer = await this.imageGenService.generateImage(finalPrompt);
-
-          // B. Upload R2 (Resize -> WebP)
-          const fileName = `posts/${postSlug}/image-${uuidv4().slice(0, 4)}`;
-          const publicUrl = await this.storageService.processAndUpload(imgBuffer, 'posts', fileName);
-
-          // C. AI Alt Text Generation (TIẾNG VIỆT cho SEO)
-          const altText = await this.seoImageAltService.generateSingleAltText(processedHtml, topic, publicUrl, user);
-
-          // D. Replace HTML
-          const imgHtml = `
-            <figure class="my-8">
-              <img src="${publicUrl}" alt="${altText}" title="${aiData.title}" class="w-full rounded-xl shadow-lg border border-gray-100" loading="lazy" />
-              <figcaption class="text-center text-sm text-gray-500 mt-3 italic font-medium">${altText}</figcaption>
-            </figure>
-          `;
+        for (const { originalTag, imgHtml } of imageResults) {
           processedHtml = processedHtml.replace(originalTag, imgHtml);
-
-        } catch (err) {
-          this.logger.error(`Image Gen Failed (${imagePrompt}): ${err.message}`);
-          processedHtml = processedHtml.replace(originalTag, ''); // Lỗi thì xóa placeholder
         }
-      }
+      };
+
+      // Chạy cả Thumbnail và Content Images cùng lúc
+      await Promise.all([thumbnailPromise(), contentImagesPromise()]);
 
       await job.updateProgress(90);
 
@@ -232,63 +260,62 @@ export class AiGenerationProcessor extends WorkerHost {
       const linkResult = await this.autoLinkingService.applyAutoLinks(processedHtml, ""); // temporary
       processedHtml = linkResult.updatedContent;
 
-      const seoAnalysis = this.seoAnalyzerService.analyze(processedHtml, topic);
+      const { content: finalContent, toc } = this.processContentWithTOC(processedHtml);
+      const seoAnalysis = this.seoAnalyzerService.analyze(finalContent, topic);
 
-      // 5. Lưu Database
-      const uniqueSlug = slugify(aiData.title, { lower: true, strict: true }) + '-' + uuidv4().slice(0, 4);
-
-      this.logger.log(`[Job ${job.id}] Persisting new post via PostsService. ID: ${uuidv4().substring(0, 8)}...`);
-
-      const newPost = await this.postsService.create({
+      // Replicating PostsService.create logic
+      const post = em.create(Post, {
         title: aiData.title,
-        slug: uniqueSlug,
+        slug: slugify(aiData.title, { lower: true, strict: true }) + '-' + uuidv4().slice(0, 4),
         excerpt: aiData.excerpt,
-        content: processedHtml,
-        meta: {
-          toc: aiData.tableOfContents,
-          aiJobId: job.id
-        },
-        aiJobId: job.id,
+        content: finalContent,
+        category,
+        author: user,
+        createdBy: user,
+        status: PostStatus.DRAFT,
         isCreatedByAI: true,
         aiPrompt: topic,
-        status: PostStatus.DRAFT,
-        categoryId: category.id,
+        aiJobId: job.id,
         thumbnailUrl: thumbnailUrl || undefined,
         seoScore: seoAnalysis.score,
         focusKeyword: topic,
-        metaTitle: metaTitle,
-        metaDescription: metaDescription,
-      } as any, user);
+        metaTitle,
+        metaDescription,
+        meta: { toc, aiJobId: job.id }
+      } as any);
 
-      this.logger.log(`[Job ${job.id}] ✅ Successfully created AI post. ID: ${newPost.id}`);
+      // Generate Schema
+      post.schemaMarkup = this.schemaMarkupService.generateSchemaGraph(post);
 
-      await job.updateProgress(100);
+      await em.persistAndFlush(post);
+      this.logger.log(`[Job ${job.id}] ✅ Created Post: ${post.id}`);
 
-      return {
-        postId: newPost.id,
-        slug: newPost.slug,
-        status: 'completed'
-      };
+      // Invalidate Cache
+      await this.cacheManager.del('posts:list:*').catch(() => { });
+      await this.cacheManager.del('CACHE_POSTS_ALL').catch(() => { });
 
-    } catch (error) {
-      this.logger.error(`Generate Post Job Failed: ${error.message}`);
-
-      // Gửi thông báo lỗi
       await this.notificationsService.create({
-        userId: userId,
-        type: NotificationType.AI_POST_FAILED,
-        title: 'Tạo bài viết AI thất bại',
-        message: `Không thể tạo bài viết về "${topic}": ${error.message}`,
-        metadata: {
-          jobId: job.id,
-          topic,
-          error: error.message,
-        },
+        userId,
+        type: NotificationType.AI_POST_COMPLETED,
+        title: 'Tạo bài viết AI thành công',
+        message: `Bài viết "${aiData.title}" đã được tạo xong.`,
+        actionUrl: `/admin/posts/${post.id}/edit`,
+        metadata: { jobId: job.id, postId: post.id }
       });
 
-      if (currentApiKey && (error.message.includes('429') || error.message.includes('Quota'))) {
-        await this.apiKeyService.reportError(currentApiKey, error);
-      }
+      await job.updateProgress(100);
+      return { postId: post.id, slug: post.slug, status: 'completed' };
+
+    } catch (error) {
+      this.logger.error(`Generate Post Failed: ${error.message}`);
+      await this.notificationsService.create({
+        userId,
+        type: NotificationType.AI_POST_FAILED,
+        title: 'Tạo bài viết AI thất bại',
+        message: error.message,
+        priority: NotificationPriority.HIGH,
+        metadata: { jobId: job.id, error: error.message }
+      });
       throw error;
     }
   }

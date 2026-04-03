@@ -2,8 +2,7 @@ import { Entity, Property, Enum } from '@mikro-orm/core';
 import { MongoBaseEntity } from '@/core/base/mongo-base.entity';
 
 export enum ScraperType {
-    STATIC = 'STATIC', // Cheerio
-    DYNAMIC = 'DYNAMIC', // Playwright
+    STATIC = 'STATIC', // axios + cheerio
 }
 
 @Entity({ collection: 'crawler_scraper_configs' })
@@ -29,6 +28,10 @@ export class ScraperConfig extends MongoBaseEntity {
         contentSelector?: string;
         thumbnailSelector?: string;
     };
+
+    /** Số request tối đa mỗi giây cho domain này (Rate limiting) */
+    @Property({ nullable: true })
+    maxRequestsPerSecond?: number;
 
     @Property({ default: true })
     isActive: boolean = true;

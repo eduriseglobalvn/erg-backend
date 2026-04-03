@@ -208,35 +208,16 @@ export class AnalyticsService {
             }
         }
 
-        // 2. Query Data
-        // Aggregate unique visitors by IP per day per device type?
-        // For simplicity & performance given requirement: Count visits (page views) or distinct IPs.
-        // Request says: "Count số lượng unique visitor (hoặc page views)"
-        // Since we store each visit, let's Aggregate.
-
-        // Vì MikroORM với lMongo driver support aggregate, nhưng ở mức repo.
-        // Or simple find and process in memory if data volume isn't huge yet.
-        // For a production scalable solution, we should accept 'visits' query might return large data.
-        // Let's use Aggregate/Knex query builder pattern or raw query if possible. 
-        // DO MikroORM Mongo allow easy robust aggregation? Yes via getCollection().aggregate()
-
-        // Using simple JS processing for now as MVP robustness (easier to debug & maintain for this code base context)
-        // But optimization: Retrieve only needed fields.
         const visits = await this.visitRepo.find(
             { createdAt: { $gte: startTime, $lte: endTime } },
-            { fields: ['createdAt', 'deviceType', 'ipAddress'] } // Chỉ lấy fields cần thiết
+            { fields: ['createdAt', 'deviceType', 'ipAddress'] }
         );
 
-        this.logger.log(`Found ${visits.length} visits in DB for the selected range.`);
-
-        // 3. Grouping Logic - TỐI ƯU: Dùng locale date để tránh lệch múi giờ
         const statsMap: Record<string, { desktop: Set<string>; mobile: Set<string>; }> = {};
         const getInitStat = () => ({ desktop: new Set<string>(), mobile: new Set<string>() });
 
-        // Helper function để lấy chuỗi YYYY-MM-DD theo giờ VN
         const formatDateLocal = (date: Date) => {
             const d = new Date(date);
-            // Cộng thêm 7 tiếng (VN) hoặc dùng toLocaleDateString với timezone
             return new Intl.DateTimeFormat('en-CA', {
                 timeZone: 'Asia/Ho_Chi_Minh',
                 year: 'numeric',
@@ -245,7 +226,6 @@ export class AnalyticsService {
             }).format(d);
         };
 
-        // Iterate visits
         for (const visit of visits) {
             const dateKey = formatDateLocal(visit.createdAt);
             if (!statsMap[dateKey]) {
@@ -262,11 +242,9 @@ export class AnalyticsService {
             }
         }
 
-        // 4. Fill missing dates
         const result: VisitorStat[] = [];
         const currentDate = new Date(startTime);
 
-        // Đảm bảo quét qua cả ngày hiện tại
         const endDayKey = formatDateLocal(endTime);
         let currentDayKey = '';
 
@@ -582,7 +560,6 @@ export class AnalyticsService {
             typeViews[cat] = (typeViews[cat] || 0) + 1;
         });
 
-        // Nâng cao: Lấy phân phối theo Chuyên mục thực tế (AI, Marketing...) từ MySQL
         const categoryInterest: Record<string, number> = {};
         if (postSlugs.size > 0) {
             const postsWithCats = await this.postRepo.find(
@@ -592,7 +569,6 @@ export class AnalyticsService {
 
             postsWithCats.forEach(p => {
                 const catName = p.category?.name || 'Uncategorized';
-                // Tính toán trọng số quan tâm dựa trên lượt xem của bài viết đó trong tập visits
                 const views = Object.values(pageMap).find(pm => pm.entityId === p.slug)?.views || 0;
                 categoryInterest[catName] = (categoryInterest[catName] || 0) + views;
             });
@@ -610,9 +586,6 @@ export class AnalyticsService {
         };
     }
 
-    /**
-     * Thống kê các tương tác (click, action) từ người dùng
-     */
     private async calculateInteractionStats(from: Date, to: Date) {
         const events = await this.eventRepo.find(
             { createdAt: { $gte: from, $lte: to } },
@@ -630,16 +603,12 @@ export class AnalyticsService {
             .slice(0, 5);
     }
 
-
-    // ========== NEW: POST ANALYTICS SUMMARY ==========
-
     async getPostSummary(range: string = '90d') {
         try {
             this.logger.log(`Generating post summary for range: ${range}`);
             const now = new Date();
             let startTime = new Date();
 
-            // 1. Calculate Start Time based on range
             switch (range) {
                 case '7d': startTime.setDate(now.getDate() - 7); break;
                 case '30d': startTime.setDate(now.getDate() - 30); break;
@@ -649,20 +618,14 @@ export class AnalyticsService {
                 default: startTime.setDate(now.getDate() - 90);
             }
 
-            // 2. Overview Stats (Total, Published, Draft)
             const [totalPosts, publishedPosts, draftPosts] = await Promise.all([
                 this.postRepo.count({ deletedAt: null }),
                 this.postRepo.count({ status: PostStatus.PUBLISHED, deletedAt: null }),
                 this.postRepo.count({ status: PostStatus.DRAFT, deletedAt: null }),
             ]);
 
-            // 3. Category Distribution
-            // We fetch categories and their post counts (filtered by createdAt >= startTime if needed, but for redistribution usually we show all or just within range)
-            // To be accurate with the range:
             const categories = await this.categoryRepo.findAll({
                 populate: ['posts'],
-                // Note: Filter posts within the collection if needed, but typically distribution is for all time or current state.
-                // Let's use the simple approach first.
             });
 
             const categoryDistribution = categories.map(cat => ({
@@ -670,7 +633,6 @@ export class AnalyticsService {
                 count: cat.posts.getItems().filter(p => !p.deletedAt && p.createdAt >= startTime).length
             })).filter(item => item.count > 0);
 
-            // 4. Monthly Stats
             const posts = await this.postRepo.find(
                 {
                     createdAt: { $gte: startTime },
@@ -683,7 +645,6 @@ export class AnalyticsService {
             const monthNames = ["January", "February", "March", "April", "May", "June",
                 "July", "August", "September", "October", "November", "December"];
 
-            // Initialize months between startTime and now
             let iterDate = new Date(startTime);
             iterDate.setDate(1);
             while (iterDate <= now) {
@@ -707,7 +668,7 @@ export class AnalyticsService {
                     posts: monthlyStatsMap[month].posts,
                     views: monthlyStatsMap[month].views,
                 }))
-                .reverse(); // Time order
+                .reverse();
 
             return {
                 monthlyStats,
@@ -720,6 +681,36 @@ export class AnalyticsService {
             };
         } catch (error) {
             this.logger.error(`Error in getPostSummary: ${error.message}`, error.stack);
+            throw error;
+        }
+    }
+
+    async generateExportData(from: Date, to: Date): Promise<string> {
+        try {
+            const visits = await this.visitRepo.find(
+                { createdAt: { $gte: from, $lte: to } },
+                {
+                    orderBy: { createdAt: 'DESC' },
+                    fields: ['createdAt', 'url', 'deviceType', 'browser', 'os', 'country', 'city', 'durationSeconds', 'ipAddress']
+                }
+            );
+
+            const headers = ['Timestamp', 'URL', 'Device', 'Browser', 'OS', 'Country', 'City', 'Duration(s)', 'IP'];
+            const rows = visits.map(v => [
+                v.createdAt.toISOString(),
+                `"${(v.url || '').replace(/"/g, '""')}"`,
+                v.deviceType || 'unknown',
+                v.browser || 'unknown',
+                v.os || 'unknown',
+                v.country || 'unknown',
+                v.city || 'unknown',
+                v.durationSeconds || 0,
+                v.ipAddress || 'unknown'
+            ]);
+
+            return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+        } catch (error) {
+            this.logger.error('Failed to generate export data', error.stack);
             throw error;
         }
     }

@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, OnModuleInit, Logger, BadRequestExceptio
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { InjectRepository } from '@mikro-orm/nestjs';
-import { EntityRepository, wrap, FilterQuery, EntityManager } from '@mikro-orm/core';
+import { EntityRepository, wrap, FilterQuery, EntityManager, LoadStrategy } from '@mikro-orm/core';
 import { Post } from './entities/post.entity';
 import { PostCategory } from './entities/post-category.entity';
 import { User } from '@/modules/users/entities/user.entity';
@@ -20,6 +20,7 @@ import { SeoHistoryService } from '@/modules/seo/services/seo-history.service';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
 import { ReviewsService } from '@/modules/reviews/reviews.service';
 import { RedirectService } from '@/modules/seo/services/redirect.service';
+import { SeoScoringEngineService } from '@/modules/seo/services/seo-scoring-engine.service';
 import * as cheerio from 'cheerio';
 import { NotificationType } from '@/modules/notifications/entities/notification.entity';
 
@@ -39,6 +40,7 @@ export class PostsService implements OnModuleInit {
     private readonly notificationsService: NotificationsService,
     private readonly reviewsService: ReviewsService,
     private readonly redirectService: RedirectService,
+    private readonly seoScoringEngineService: SeoScoringEngineService,
   ) { }
 
   private async clearPostsCache() {
@@ -58,6 +60,37 @@ export class PostsService implements OnModuleInit {
     } catch (error) {
       this.logger.error('Failed to clear post cache', error);
     }
+  }
+
+  private async clearSitemapCache() {
+    try {
+      const store = this.cacheManager.store as any;
+      if (typeof store.keys === 'function') {
+        const keys = await store.keys('/sitemap*');
+        if (keys && keys.length > 0) {
+          await Promise.all(keys.map((k: string) => this.cacheManager.del(k)));
+        }
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to clear sitemap cache: ${error.message}`);
+    }
+  }
+
+  // F3.2 Helper method to resolve post domain
+  private getDomainByCategory(categorySlug?: string, code?: string): string {
+    const defaultSiteUrl = 'https://erg.edu.vn';
+    if (!categorySlug && !code) return defaultSiteUrl;
+
+    if (categorySlug?.includes('tin-tuc')) return defaultSiteUrl;
+    if (categorySlug?.includes('ai-') || code?.startsWith('AI')) return 'https://ai.erg.edu.vn';
+    if (categorySlug?.includes('mos') || categorySlug?.includes('ic3')) return 'https://tinhocquocte.erg.edu.vn';
+    if (categorySlug?.includes('ung-dung')) return 'https://tinhocquocgia.erg.edu.vn';
+    if (categorySlug?.includes('ielts')) return 'https://ielts.erg.edu.vn';
+    if (categorySlug?.includes('toeic')) return 'https://toeic.erg.edu.vn';
+    if (categorySlug?.includes('tuyen-dung') || code?.startsWith('HR')) return 'https://tuyendung.erg.edu.vn';
+    if (categorySlug?.includes('kids')) return 'https://kids.erg.edu.vn';
+
+    return defaultSiteUrl;
   }
 
   private async clearCategoriesCache() {
@@ -98,7 +131,8 @@ export class PostsService implements OnModuleInit {
     for (const cat of defaultCategories) {
       let category = await categoryRepo.findOne({ slug: cat.slug });
       if (!category) {
-        category = categoryRepo.create(cat);
+        // [TS FIX] `isHidden` required explicit mapping or rely on schema default (though MikrORM strict types complain)
+        category = categoryRepo.create({ ...cat, isHidden: false });
         await em.persistAndFlush(category);
         this.logger.log(`Created default category: ${cat.name}`);
       } else if (!category.icon) {
@@ -186,7 +220,7 @@ export class PostsService implements OnModuleInit {
       metaTitle: createPostDto.metaTitle || (createPostDto.title ? this.seoAnalyzerService.generateMeta(createPostDto.title, finalContent || '').metaTitle : undefined),
       metaDescription: createPostDto.metaDescription || (finalContent ? this.seoAnalyzerService.generateMeta(createPostDto.title, finalContent).metaDescription : undefined),
       keywords: createPostDto.keywords,
-      canonicalUrl: createPostDto.canonicalUrl,
+      canonicalUrl: createPostDto.canonicalUrl || `${this.getDomainByCategory(category.slug)}/posts/${finalSlug}`, // F3.2 Auto-generate Canonical URL
       schemaType: createPostDto.schemaType,
     });
 
@@ -245,19 +279,22 @@ export class PostsService implements OnModuleInit {
           };
         }
 
-        await this.postRepository.getEntityManager().flush();
-
-        // Record SEO history
         // Record SEO history
         const seoAnalysis = this.seoAnalyzerService.analyzeComprehensive(post);
         await this.seoHistoryService.recordSnapshot(post, seoAnalysis);
+
+        // [NEW] Calculate Advanced SEO Score (Sprint 3 Phase 5)
+        if (post.isPublished) {
+          await this.seoScoringEngineService.calculateScore(post, post.focusKeyword);
+        }
       }
     } catch (err) {
       this.logger.error('Failed to generate SEO metadata', err);
       // Don't fail the request just because SEO generation failed
     }
 
-    await this.clearPostsCache(); // Invalidate cache
+    await this.clearPostsCache(); // Invalidate post cache
+    await this.clearSitemapCache(); // F4.1 Invalidate sitemap cache
 
     // [NOTIFICATION] Gửi thông báo khi bài viết được tạo thành công
     try {
@@ -333,18 +370,22 @@ export class PostsService implements OnModuleInit {
     const exist = await this.categoryRepository.findOne({ slug });
     if (exist) throw new BadRequestException('Category slug already exists');
 
-    const cat = this.categoryRepository.create({ ...dto, slug });
+    // [TS FIX] Set explicitly to false for creation to satisfy RequiredEntityData
+    const cat = this.categoryRepository.create({ ...dto, slug, isHidden: false });
     await this.categoryRepository.getEntityManager().persistAndFlush(cat);
     await this.clearCategoriesCache();
     return cat;
   }
 
   async findAllCategories() {
-    const cacheKey = 'CACHE_CATEGORIES_ALL';
+    const cacheKey = 'CACHE_CATEGORIES_PUBLIC_ALL';
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) return cached;
 
-    const categories = await this.categoryRepository.findAll();
+    // Chỉ lấy category không bị ẩn
+    const categories = await this.categoryRepository.findAll({
+      where: { isHidden: false }
+    });
     // Cache for 1 hour (3600000 ms)
     await this.cacheManager.set(cacheKey, categories, 3600000);
 
@@ -382,7 +423,15 @@ export class PostsService implements OnModuleInit {
   // 2. LẤY DANH SÁCH (FIND ALL - Pagination & Search)
   // =================================================================
   async findAll(query: PostQueryDto) {
-    const cacheKey = `CACHE_POSTS_QUERY_${JSON.stringify(query)}`;
+    const cacheKey = [
+      'posts:list',
+      query.page || 1,
+      query.limit || 10,
+      query.search || 'all',
+      query.categoryId || 'all',
+      (query as any).domain || 'all',
+      query.status || 'all',
+    ].join(':');
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) return cached;
 
@@ -391,6 +440,7 @@ export class PostsService implements OnModuleInit {
 
     const where: FilterQuery<Post> = {
       deletedAt: null, // Mặc định chỉ lấy bài chưa xóa
+      category: { isHidden: false }, // [NEW] Không fetch bài viết thuộc category đang ẩn báo cáo
     };
 
     if (status) {
@@ -399,11 +449,19 @@ export class PostsService implements OnModuleInit {
 
     // Tìm kiếm (Title, Excerpt, Content)
     if (search) {
-      where.$or = [
-        { title: { $like: `%${search}%` } },
-        { excerpt: { $like: `%${search}%` } },
-        { content: { $like: `%${search}%` } },
-      ];
+      const expanded = this.getExpandedKeywords(search);
+      const searchTerms = [search, ...expanded];
+
+      const searchConditions = searchTerms.map(term => ({
+        $or: [
+          { title: { $like: `%${term}%` } },
+          { excerpt: { $like: `%${term}%` } },
+          { content: { $like: `%${term}%` } },
+          { keywords: { $like: `%${term}%` } }, // Ngoài ra kiểm tra cột keywords
+        ]
+      }));
+
+      where.$or = searchConditions;
     }
 
     // Lọc theo Category ID
@@ -435,8 +493,10 @@ export class PostsService implements OnModuleInit {
       offset,
       orderBy: { [sortBy]: order }, // Dynamic sorting
       populate: ['category', 'author'], // Join bảng để lấy thông tin
+      strategy: LoadStrategy.JOINED,
       exclude: ['content', 'meta'] as any,
     });
+
 
     const result = {
       data: items,
@@ -456,28 +516,28 @@ export class PostsService implements OnModuleInit {
   // 3. LẤY CHI TIẾT (FIND ONE)
   // =================================================================
   async findOne(id: string): Promise<Post> {
-    console.log(`[PostsService] Finding post by ID: "${id}"`);
+    this.logger.debug(`Finding post by ID: "${id}"`);
     // 1. Try find by Primary Key (id)
     let post = await this.postRepository.findOne(
       { id },
-      { populate: ['category', 'author'] },
+      { populate: ['category', 'author'], strategy: LoadStrategy.JOINED },
     );
 
     // 2. [FALLBACK] If not found, try find by aiJobId
     if (!post) {
-      console.log(`[PostsService] ID not found in PK, trying aiJobId: "${id}"`);
+      this.logger.debug(`ID not found in PK, trying aiJobId: "${id}"`);
       post = await this.postRepository.findOne(
         { aiJobId: id },
-        { populate: ['category', 'author'] },
+        { populate: ['category', 'author'], strategy: LoadStrategy.JOINED },
       );
     }
 
     if (!post) {
-      console.warn(`[PostsService] ❌ Post with ID/JobID "${id}" NOT FOUND in database.`);
+      this.logger.warn(`Post with ID/JobID "${id}" NOT FOUND in database.`);
       throw new NotFoundException(`Post #${id} not found`);
     }
 
-    console.log(`[PostsService] ✅ Post found: "${post.title}" (DeletedAt: ${post.deletedAt})`);
+    this.logger.debug(`Post found: "${post.title}"`);
 
     // [NEW] Append Rating Stats
     try {
@@ -514,10 +574,13 @@ export class PostsService implements OnModuleInit {
       post.viewCount = (post.viewCount || 0) + 1;
       await this.postRepository.getEntityManager().flush();
 
-      // [NEW] Append Rating Stats
+      // [NEW] Append Rating Stats & Recent Reviews for Schema
       try {
         const rating = await this.reviewsService.getStats(post.id);
         (post as any).rating = rating;
+
+        const recentReviewsReq = await this.reviewsService.findAll(post.id, 1, 5);
+        (post as any).recentReviews = recentReviewsReq.items || [];
       } catch (e) {
         this.logger.warn(`Failed to get rating for post ${post.id}: ${e.message}`);
       }
@@ -562,26 +625,44 @@ export class PostsService implements OnModuleInit {
     // A. Xử lý Slug nếu có thay đổi
     if (updatePostDto.slug) {
       const oldSlug = post.slug;
-      updatePostDto.slug = slugify(updatePostDto.slug, { lower: true, strict: true });
+
+      // F3.3: Reserved words blacklist
+      const reservedSlugs = ['admin', 'api', 'auth', 'login', 'sitemap', 'robots', 'preview'];
+      const rawSlug = slugify(updatePostDto.slug, { lower: true, strict: true });
+      if (reservedSlugs.includes(rawSlug)) {
+        throw new BadRequestException(`Slug '${rawSlug}' is a reserved keyword.`);
+      }
+
+      updatePostDto.slug = rawSlug;
       const newSlug = updatePostDto.slug;
 
-      // [NEW] Auto-Redirect logic
+      // [NEW] F3.1: Auto-Redirect logic
       if (oldSlug !== newSlug) {
         // Create 301 Redirect from old URL to new URL
-        // Using /posts/:slug convention (Frontend URL)
-        // If categories imply different structure, logic needs to be smarter.
-        // Assuming /posts/:slug or /khoa-hoc/:slug?
-        // Let's use generic logic or specific to known Post type.
-        // For now: /posts/old -> /posts/new
+        const domain = this.getDomainByCategory(post.category?.slug);
         await this.redirectService.create({
           fromPattern: `/posts/${oldSlug}`,
-          toUrl: `/posts/${newSlug}`,
+          toUrl: `${domain}/posts/${newSlug}`,
           type: '301',
           isActive: true,
         }).catch(err => {
           this.logger.warn(`Failed to create auto-redirect for ${oldSlug}->${newSlug}: ${err.message}`);
         });
+
+        // Also update Canonical URL if it used the old slug exactly (auto-generated ones)
+        if (post.canonicalUrl) {
+          const expectedOldCanonical = `${domain}/posts/${oldSlug}`;
+          if (post.canonicalUrl === expectedOldCanonical) {
+            updatePostDto.canonicalUrl = `${domain}/posts/${newSlug}`;
+          }
+        }
       }
+    }
+
+    // F3.2: Ensure canonical URL exists
+    if (!post.canonicalUrl && !updatePostDto.canonicalUrl) {
+      const domain = this.getDomainByCategory(post.category?.slug);
+      updatePostDto.canonicalUrl = `${domain}/posts/${updatePostDto.slug || post.slug}`;
     }
 
     // B. Xử lý Content & TOC nếu có thay đổi content
@@ -629,8 +710,16 @@ export class PostsService implements OnModuleInit {
 
     await this.postRepository.getEntityManager().flush();
 
-    // Clear cache specifically
+    // [NEW] Calculate Advanced SEO Score on Update (Sprint 3 Phase 5)
+    if (post.isPublished && (updatePostDto.content !== undefined || updatePostDto.focusKeyword !== undefined)) {
+      await this.seoScoringEngineService.calculateScore(post, post.focusKeyword);
+    }
+
+    // Clear cache
     await this.clearPostsCache();
+    await this.cacheManager.del(`post:${post.slug}`);
+    await this.cacheManager.del(`schema:${id}`);
+    await this.clearSitemapCache(); // F4.1 Invalidate sitemap cache
 
     return post;
   }
@@ -688,6 +777,7 @@ export class PostsService implements OnModuleInit {
     post.deletedAt = new Date();
     await this.postRepository.getEntityManager().flush();
     await this.clearPostsCache();
+    await this.cacheManager.del(`schema:${id}`);
   }
 
   /**
@@ -700,6 +790,7 @@ export class PostsService implements OnModuleInit {
     post.deletedAt = undefined;
     await this.postRepository.getEntityManager().flush();
     await this.clearPostsCache();
+    await this.cacheManager.del(`schema:${id}`);
   }
 
   /**
@@ -709,8 +800,68 @@ export class PostsService implements OnModuleInit {
     const post = await this.postRepository.findOne({ id }, { filters: false });
     if (!post) throw new NotFoundException('Post not found');
 
+    // Also clear cache for this particular post
+    await this.cacheManager.del(`post:${post.slug}`);
+    await this.cacheManager.del(`schema:${id}`);
+
     await this.postRepository.getEntityManager().removeAndFlush(post);
     await this.clearPostsCache();
+    await this.clearSitemapCache(); // F4.1
+    await this.cacheManager.del(`schema:${id}`);
+  }
+
+  // =================================================================
+  // 3.4. LẤY BÀI VIẾT ẨN VÀ CHUYỂN BÀI (HIDDEN POSTS)
+  // =================================================================
+  async findHiddenPosts(query: PostQueryDto) {
+    const { page = 1, limit = 10, search } = query;
+    const offset = (page - 1) * limit;
+
+    const where: FilterQuery<Post> = {
+      deletedAt: null,
+      category: { isHidden: true },
+    };
+
+    if (search) {
+      where.$or = [
+        { title: { $like: `%${search}%` } },
+        { content: { $like: `%${search}%` } },
+      ];
+    }
+
+    const [items, total] = await this.postRepository.findAndCount(where, {
+      limit,
+      offset,
+      orderBy: { createdAt: 'DESC' },
+      populate: ['category', 'author'],
+      exclude: ['content', 'meta'] as any,
+    });
+
+    return {
+      data: items,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async promoteToPublic(postId: string, newCategoryId: string, user: User) {
+    const post = await this.findOne(postId);
+    const newCategory = await this.categoryRepository.findOne({ id: newCategoryId });
+
+    if (!newCategory) throw new NotFoundException('Public category not found');
+    if (newCategory.isHidden) throw new BadRequestException('Target category is also hidden');
+
+    post.category = newCategory;
+    post.updatedAt = new Date();
+
+    // Auto publish on promote (optional, dependent on design)
+    // post.status = PostStatus.PUBLISHED; 
+    // post.isPublished = true;
+
+    await this.postRepository.getEntityManager().flush();
+    await this.clearPostsCache();
+    await this.clearSitemapCache();
+
+    return post;
   }
 
   // =================================================================
@@ -742,11 +893,12 @@ export class PostsService implements OnModuleInit {
   // =================================================================
   async getSitemapUrls(domainFilter?: string) {
     const posts = await this.postRepository.find(
-      { isPublished: true, deletedAt: null },
+      { isPublished: true, deletedAt: null, category: { isHidden: false } }, // Bỏ qua Hidden Categories
       {
         populate: ['category'], // Load Category to decide Domain
-        fields: ['slug', 'updatedAt', 'publishedAt', 'title', 'category.slug', 'category.name', 'content'],
+        fields: ['slug', 'updatedAt', 'publishedAt', 'title', 'thumbnailUrl', 'category.slug', 'category.name'],
         orderBy: { updatedAt: 'DESC' },
+        limit: 50000,
       }
     );
 
@@ -779,26 +931,12 @@ export class PostsService implements OnModuleInit {
         changefreq: 'weekly',
         priority: 0.8,
         title: post.title,
-        images: this.extractImages(post.content || '', post.title),
+        images: post.thumbnailUrl ? [{ loc: post.thumbnailUrl, title: post.title, caption: '' }] : [],
       };
     }).filter(Boolean); // Filter nulls
   }
 
-  private getDomainByCategory(categorySlug?: string): string {
-    if (!categorySlug) return 'https://erg.edu.vn';
 
-    // Simple Mapping based on naming convention
-    // In real app, this should be in Database or Config
-    if (categorySlug.includes('ai') || categorySlug.includes('tri-tue-nhan-tao')) return 'https://ai.erg.edu.vn';
-    if (categorySlug.includes('tin-hoc-quoc-te') || categorySlug.includes('mos') || categorySlug.includes('ic3')) return 'https://tinhocquocte.erg.edu.vn';
-    if (categorySlug.includes('tin-hoc-quoc-gia')) return 'https://tinhocquocgia.erg.edu.vn';
-    if (categorySlug.includes('thieu-nhi') || categorySlug.includes('scratch') || categorySlug.includes('kid')) return 'https://tinhocthieunhi.erg.edu.vn';
-    if (categorySlug.includes('cong-dan-so')) return 'https://congdanso.erg.edu.vn';
-    if (categorySlug.includes('cloud') || categorySlug.includes('dam-may')) return 'https://dientoandammay.erg.edu.vn';
-    if (categorySlug.includes('tuyen-dung') || categorySlug.includes('career')) return 'https://tuyendung.erg.edu.vn';
-
-    return 'https://erg.edu.vn'; // Default Main Domain
-  }
 
   private extractImages(content: string, defaultTitle: string): any[] {
     const $ = cheerio.load(content);
@@ -832,5 +970,22 @@ export class PostsService implements OnModuleInit {
     const data = await this.cacheManager.get(`POST_PREVIEW:${id}`);
     if (!data) throw new NotFoundException('Bản xem trước đã hết hạn hoặc không tồn tại.');
     return data;
+  }
+
+  private getExpandedKeywords(search: string): string[] {
+    const synonyms: Record<string, string[]> = {
+      'du học': ['trao đổi sinh viên', 'học bổng', 'visa du học', 'định cư'],
+      'mos': ['ic3', 'tin học văn phòng', 'microsoft office specialist'],
+      'ielts': ['toeic', 'tiếng anh du học', 'cambridge english'],
+      'tuyển sinh': ['nhập học', 'xét tuyển', 'đăng ký học'],
+    };
+
+    const searchLower = search.toLowerCase();
+    for (const [key, values] of Object.entries(synonyms)) {
+      if (searchLower.includes(key)) {
+        return values;
+      }
+    }
+    return [];
   }
 }

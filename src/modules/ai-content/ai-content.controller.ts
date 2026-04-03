@@ -11,12 +11,14 @@ import {
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '@/modules/auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '@/modules/access-control/guards/permissions.guard';
 import { Permissions } from '@/modules/access-control/decorators/permissions.decorator';
 import { UsersService } from '@/modules/users/users.service';
 import { PostsService } from '@/modules/posts/posts.service';
 import { AiContentService } from './services/ai-content.service';
+import { ProviderHealthService } from './services/provider-health.service';
 
 @Controller('ai-content')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -26,10 +28,13 @@ export class AiContentController {
     private readonly usersService: UsersService,
     private readonly postsService: PostsService,
     private readonly aiContentService: AiContentService,
+    private readonly providerHealthService: ProviderHealthService,
   ) { }
 
   @HttpPost('generate')
   @Permissions('posts.create')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 3, ttl: 60000 } }) // Max 3 lần generate/phút/user
   async generatePost(
     @Body() body: { topic: string; categoryId: string },
     @Request() req,
@@ -91,6 +96,8 @@ export class AiContentController {
 
   @HttpPost('refine')
   @Permissions('posts.create')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // Max 10 lần refine/phút/user
   async refineContent(
     @Body() body: { content?: string; text?: string; instruction: string },
     @Request() req,
@@ -153,5 +160,11 @@ export class AiContentController {
       result, // Dữ liệu bài viết AI tạo ra sẽ nằm ở đây
       error: failedReason,
     };
+  }
+
+  @Get('provider-health')
+  @Permissions('system.logs')
+  async getProviderHealth() {
+    return this.providerHealthService.getHealthStatus();
   }
 }

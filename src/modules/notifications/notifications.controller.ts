@@ -37,6 +37,42 @@ export class NotificationsController {
         return { updated: count };
     }
 
+    @Get('by-type/:type')
+    async getByType(
+        @Param('type') type: any,
+        @Req() req: any,
+        @Query('limit') limit?: number,
+        @Query('offset') offset?: number,
+    ) {
+        return this.notificationsService.findByType(req.user.id, type, Number(limit || 20), Number(offset || 0));
+    }
+
+    @Get('by-source/:source')
+    async getBySource(
+        @Param('source') source: string,
+        @Req() req: any,
+        @Query('limit') limit?: number,
+        @Query('offset') offset?: number,
+    ) {
+        return this.notificationsService.findBySource(req.user.id, source, Number(limit || 20), Number(offset || 0));
+    }
+
+    @Get('group/:groupKey')
+    async getByGroup(
+        @Param('groupKey') groupKey: string,
+        @Req() req: any,
+        @Query('limit') limit?: number,
+        @Query('offset') offset?: number,
+    ) {
+        return this.notificationsService.findByGroup(req.user.id, groupKey, Number(limit || 20), Number(offset || 0));
+    }
+
+    @Delete('read-all')
+    async deleteAllRead(@Req() req: any) {
+        const count = await this.notificationsService.deleteAllRead(req.user.id);
+        return { deleted: count };
+    }
+
     @Delete(':id')
     async deleteNotification(@Param('id') id: string, @Req() req: any) {
         const success = await this.notificationsService.delete(id, req.user.id);

@@ -39,4 +39,44 @@ export class Review extends BaseEntity {
 
     @Enum({ items: () => ReviewStatus, default: ReviewStatus.PENDING })
     status: ReviewStatus = ReviewStatus.PENDING;
+
+    // --- Moderation fields ---
+    @Property({ type: 'text', nullable: true })
+    adminNote?: string;
+
+    @Property({ nullable: true })
+    reviewedBy?: string;
+
+    @Property({ nullable: true })
+    reviewedAt?: Date;
+
+    @Property({ type: 'text', nullable: true })
+    replyContent?: string;
+
+    @Property({ nullable: true })
+    replyBy?: string;
+
+    @Property({ nullable: true })
+    replyAt?: Date;
+
+    // --- Presentation fields ---
+    @Property({ default: false })
+    isFeatured: boolean = false;
+
+    @Property({ default: 0 })
+    helpfulCount: number = 0;
+
+    // --- Anti-spam fields ---
+    @Property({ nullable: true })
+    ipAddress?: string;
+
+    @Property({ type: 'text', nullable: true })
+    userAgent?: string;
+
+    // --- Public user data backup ---
+    @Property({ nullable: true })
+    userEmail?: string;
+
+    @Property({ nullable: true })
+    userAvatar?: string;
 }

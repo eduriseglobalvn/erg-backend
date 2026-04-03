@@ -1,10 +1,10 @@
 import { Entity, Property, OneToOne, Enum } from '@mikro-orm/core';
 import { BaseEntity } from '@/core/base/base.entity';
-import { User } from '@/modules/users/entities/user.entity';
+import type { User } from '@/modules/users/entities/user.entity';
 
 @Entity({ tableName: 'profiles' })
 export class TeacherProfile extends BaseEntity {
-  @OneToOne(() => User, (user) => user.teacherProfile, { owner: true })
+  @OneToOne('User', (user: any) => user.teacherProfile, { owner: true })
   user!: User;
 
   @Property({ type: 'text', nullable: true })

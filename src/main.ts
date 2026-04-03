@@ -1,12 +1,68 @@
 import { NestFactory, Reflector, HttpAdapterHost } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import compression from 'compression';
+import { ValidationPipe, Logger } from '@nestjs/common';
+import helmet from 'helmet';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import { TransformInterceptor } from './core/interceptors/transform.interceptor'; // Import mới
-import { AllExceptionsFilter } from './core/filters/all-exceptions.filter'; // Import mới
+import { json, urlencoded } from 'express';
+import { TransformInterceptor } from './core/interceptors/transform.interceptor';
+import { AllExceptionsFilter } from './core/filters/all-exceptions.filter';
+import { AbuseDetectionService } from './modules/operations/abuse-detection.service';
+
+const logger = new Logger('Bootstrap');
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // ═══ SECURITY: Body Size Limits ═══
+  // Default: 5MB cho tất cả requests
+  app.use(json({ limit: '5mb' }));
+  app.use(urlencoded({ extended: true, limit: '5mb' }));
+  // Upload endpoints cho phép lớn hơn (50MB)
+  app.use('/api/upload', json({ limit: '50mb' }));
+
+  // ═══ SECURITY: Request Timeout (30s) ═══
+  app.use((req: any, res: any, next: any) => {
+    const timeout = setTimeout(() => {
+      if (!res.headersSent) {
+        res.status(408).json({
+          statusCode: 408,
+          message: 'Request Timeout — quá 30 giây xử lý',
+          error: 'Request Timeout',
+        });
+      }
+    }, 30000);
+
+    res.on('finish', () => clearTimeout(timeout));
+    res.on('close', () => clearTimeout(timeout));
+    next();
+  });
+
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // ═══ SECURITY: Custom Headers ═══
+  app.use((req: any, res: any, next: any) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '0'); // Modern browsers don't need this
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
+  });
+
+  // 0. Compression (gzip) — giảm 70-80% bandwidth
+  app.use(compression());
+  app.use(helmet({
+    contentSecurityPolicy: isProduction ? {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "https://meida.erg.edu.vn"], // allow media domain
+        connectSrc: ["'self'", "https://*.erg.edu.vn"],
+      },
+    } : false, // Tắt CSP ở dev để Swagger hoạt động
+  }));
 
   // 1. Logger
   // app.useLogger(...) -> Code cũ của bạn
@@ -16,6 +72,7 @@ async function bootstrap() {
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
+      forbidNonWhitelisted: true, // SECURITY: Reject requests with unexpected properties
       transform: true,
       // trick này giúp class-validator ném lỗi về Filter xử lý đẹp hơn
       exceptionFactory: (errors) => {
@@ -36,7 +93,8 @@ async function bootstrap() {
   // 4. GLOBAL FILTER (Chuẩn hóa Error Response)
   // HttpAdapterHost giúp Filter hoạt động tốt với cả Express và Fastify (nếu sau này đổi ý)
   const httpAdapter = app.get(HttpAdapterHost);
-  app.useGlobalFilters(new AllExceptionsFilter(httpAdapter));
+  const abuseDetectionService = app.get(AbuseDetectionService, { strict: false });
+  app.useGlobalFilters(new AllExceptionsFilter(httpAdapter, abuseDetectionService));
 
   // 5. TỐI ƯU CORS (Bảo mật & Hiệu suất)
   app.enableCors({
@@ -63,7 +121,7 @@ async function bootstrap() {
       if (isAllowed) {
         callback(null, true);
       } else {
-        console.warn(`[CORS Blocked]: Origin "${origin}" is not in allowed list.`);
+        logger.warn(`[CORS Blocked]: Origin "${origin}" is not in allowed list.`);
         // Không throw Error, chỉ reject bằng cách return false
         callback(null, false);
       }
@@ -87,16 +145,29 @@ async function bootstrap() {
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api-docs', app, document, {
-    swaggerOptions: {
-      persistAuthorization: true,
-      tagsSorter: 'alpha',
-      operationsSorter: 'alpha',
-    },
-  });
 
-  await app.listen(process.env.PORT || 3003, '0.0.0.0');
-  console.log(`Application is running on: ${await app.getUrl()}`);
-  console.log(`📚 Swagger API Docs: ${await app.getUrl()}/api-docs`);
+  if (!isProduction) {
+    SwaggerModule.setup('api-docs', app, document, {
+      swaggerOptions: {
+        persistAuthorization: true,
+        tagsSorter: 'alpha',
+        operationsSorter: 'alpha',
+      },
+    });
+  }
+
+  // 7. Khởi động Server hoặc Worker
+  if (process.env.START_MODE === 'worker') {
+    // Chế độ Worker: Chỉ khởi tạo các module (bao gồm Queue Consumers), KHÔNG mở port HTTP
+    await app.init();
+    logger.log('Background Worker is running... (HTTP Server disabled)');
+  } else {
+    // Chế độ API hoặc mặc định: Mở port HTTP
+    const port = process.env.PORT || 3003;
+    await app.listen(port, '0.0.0.0');
+    logger.log(`API Server is listening on port ${port}`);
+    logger.log(`Application is running on: ${await app.getUrl()}`);
+    logger.log(`Swagger API Docs: ${await app.getUrl()}/api-docs`);
+  }
 }
 bootstrap();

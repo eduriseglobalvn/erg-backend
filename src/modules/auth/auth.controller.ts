@@ -8,7 +8,9 @@ import {
   Req,
   Ip,
   Get,
+  UnauthorizedException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AuthGuard } from '@nestjs/passport';
 // FIX LỖI 1 (TS1272): Dùng 'import type' để báo cho TS biết đây chỉ là kiểu dữ liệu, không phải value
 import type { Request } from 'express';
@@ -36,10 +38,11 @@ interface RequestWithUser extends Request {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(private authService: AuthService) { }
 
   // 1. Đăng ký
   @Post('register')
+  @Throttle({ 'auth-register': { limit: 3, ttl: 3600000 } })
   @ResponseMessage(ApiMessage.REGISTER_SUCCESS)
   register(
     @Body() dto: RegisterDto,
@@ -52,6 +55,7 @@ export class AuthController {
 
   // 2. Đăng nhập
   @Post('login')
+  @Throttle({ 'auth-login': { limit: 5, ttl: 900000 } })
   @HttpCode(HttpStatus.OK)
   @ResponseMessage(ApiMessage.LOGIN_SUCCESS)
   login(@Body() dto: LoginDto, @Ip() ip: string, @Req() req: Request) {
@@ -84,7 +88,7 @@ export class AuthController {
 
     // Thêm check an toàn nếu refreshToken undefined (dù Guard đã check rồi)
     if (!refreshToken) {
-      throw new Error('Refresh token missing in request context');
+      throw new UnauthorizedException('Refresh token missing in request context');
     }
 
     return this.authService.refreshTokens(userId, refreshToken, ip, ua);

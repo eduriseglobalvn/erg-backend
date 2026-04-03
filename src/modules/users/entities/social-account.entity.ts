@@ -1,11 +1,11 @@
 import { Entity, Property, ManyToOne, Enum } from '@mikro-orm/core';
 import { BaseEntity } from '@/core/base/base.entity';
-import { User } from '@/modules/users/entities/user.entity';
+import type { User } from '@/modules/users/entities/user.entity';
 import { AuthProvider } from '@/shared/enums/app.enum';
 
 @Entity({ tableName: 'social_accounts' })
 export class SocialAccount extends BaseEntity {
-  @ManyToOne(() => User)
+  @ManyToOne('User')
   user!: User;
 
   @Enum(() => AuthProvider)

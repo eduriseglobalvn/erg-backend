@@ -28,9 +28,30 @@ export class ApiKeyController {
     }
 
     @Delete(':id')
+    @Permissions('posts.create')
     async removeKey(@Request() req, @Param('id') id: string) {
         const user = await this.usersService.findByEmail(req.user.email);
         await this.apiKeyService.removeKey(user, id);
         return { success: true };
+    }
+
+    // --- DASHBOARD & TESTING ---
+
+    @Get('dashboard')
+    @Permissions('posts.create') // Cần quyền quản trị để xem dashboard
+    async getDashboard() {
+        return this.apiKeyService.getDashboard();
+    }
+
+    @Post(':id/test')
+    @Permissions('posts.create')
+    async testKey(@Param('id') id: string) {
+        return this.apiKeyService.testKey(id);
+    }
+
+    @Post(':id/reactivate')
+    @Permissions('posts.create')
+    async reactivateKey(@Param('id') id: string) {
+        return this.apiKeyService.reactivateKey(id);
     }
 }

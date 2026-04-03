@@ -33,4 +33,22 @@ export class RssFeed extends MongoBaseEntity {
     /** Quyền đăng: true = PUBLISHED, false = DRAFT */
     @Property({ default: false })
     autoPublish: boolean = false;
+
+    // --- HIDDEN POST SETTINGS ---
+    /** Đăng vào category ẩn thay vì mục public */
+    @Property({ default: false })
+    isHiddenCrawl: boolean = false;
+
+    /** Slug của hidden category (VD: "__hidden_scrape_pool") */
+    @Property({ nullable: true })
+    hiddenCategorySlug?: string;
+
+    // --- AUTO CRAWL EXTENSIONS ---
+    /** Danh sách từ khoá dùng để cào tự động, cách nhau dấu phẩy */
+    @Property({ nullable: true })
+    autoKeywords?: string;
+
+    /** Lịch cào tự động riêng lẻ (VD: "0 * * * *") */
+    @Property({ nullable: true })
+    autoSchedule?: string;
 }

@@ -1,154 +1,68 @@
-import { Injectable } from '@nestjs/common';
-import { CreateRequestContext, EntityManager, MikroORM } from '@mikro-orm/core';
-import { ApiKey, ApiKeyStatus, ApiKeyType } from '../entities/api-key.entity';
+import { Injectable, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
+import { CreateRequestContext, EntityManager } from '@mikro-orm/core';
+import { ApiKey, ApiKeyStatus, ApiKeyType, AIProviderType } from '../entities/api-key.entity';
 import { User } from '@/modules/users/entities/user.entity';
+import { AIProviderFactory } from '../providers/ai-provider.factory';
+import { ApiKeyCryptoService } from './api-key-crypto.service';
+import { ApiKeyRotationService } from './api-key-rotation.service';
 
 @Injectable()
 export class ApiKeyService {
+  private readonly logger = new Logger(ApiKeyService.name);
+
   constructor(
     private readonly em: EntityManager,
-    private readonly orm: MikroORM,
+    private readonly aiProviderFactory: AIProviderFactory,
+    private readonly cryptoService: ApiKeyCryptoService,
+    private readonly rotationService: ApiKeyRotationService,
   ) { }
 
-  @CreateRequestContext()
-  async getAvailableKey(user: User): Promise<ApiKey> {
-    const now = new Date();
-
-    // 1. Tìm TẤT CẢ Key của User này
-    const myKeys = await this.em.find(ApiKey, {
-      owner: user,
-      type: ApiKeyType.PRIVATE,
-      status: { $ne: ApiKeyStatus.ERROR }, // Không lấy key hỏng hoàn toàn
-    } as any, { orderBy: { todayUsage: 'ASC' } });
-
-    for (const key of myKeys) {
-      await this.checkAndResetDailyUsage(key);
-
-      // Bỏ qua nếu Key đang trong thời gian Cooldown (RPM) hoặc hết Quota (RPD)
-      if (key.status === ApiKeyStatus.QUOTA_EXCEEDED) continue;
-      if (key.status === ApiKeyStatus.RATE_LIMITED && key.cooldownUntil && key.cooldownUntil > now) continue;
-
-      // Nếu trạng thái là RATE_LIMITED nhưng đã hết thời gian cooldown thì tự động ACTIVE lại
-      if (key.status === ApiKeyStatus.RATE_LIMITED && (!key.cooldownUntil || key.cooldownUntil <= now)) {
-        key.status = ApiKeyStatus.ACTIVE;
-        await this.em.persistAndFlush(key);
-      }
-
-      return key;
-    }
-
-    // 2. Nếu hết Key Private, tìm TẤT CẢ Key Shared
-    const sharedKeys = await this.em.find(ApiKey, {
-      type: ApiKeyType.SHARED,
-      status: { $ne: ApiKeyStatus.ERROR },
-    } as any, { orderBy: { todayUsage: 'ASC' } });
-
-    for (const key of sharedKeys) {
-      await this.checkAndResetDailyUsage(key);
-      if (key.status === ApiKeyStatus.QUOTA_EXCEEDED) continue;
-      if (key.status === ApiKeyStatus.RATE_LIMITED && key.cooldownUntil && key.cooldownUntil > now) continue;
-
-      return key;
-    }
-
-    throw new Error('All available AI API Keys are currently unavailable (Rate Limited or Quota Exceeded). Please add keys from DIFFERENT Google Cloud Projects to increase limits.');
+  // Delegates to RotationService
+  async getAvailableKey(user: User, provider: AIProviderType = AIProviderType.GEMINI) {
+    return this.rotationService.getAvailableKey(user, provider);
   }
 
-  async checkAndResetDailyUsage(key: ApiKey) {
-    const now = new Date();
-    const lastUsed = key.lastUsedAt || new Date(0);
-
-    // Nếu qua ngày mới thì reset todayUsage
-    if (now.toDateString() !== lastUsed.toDateString()) {
-      key.todayUsage = 0;
-      if (key.status === ApiKeyStatus.QUOTA_EXCEEDED) {
-        key.status = ApiKeyStatus.ACTIVE;
-      }
-      await this.em.persistAndFlush(key);
-    }
-
-    if (key.todayUsage >= key.maxDailyQuota) {
-      key.status = ApiKeyStatus.QUOTA_EXCEEDED;
-      await this.em.persistAndFlush(key);
-      throw new Error('Quota exceeded');
-    }
-  }
-
-  @CreateRequestContext()
   async logUsage(keyId: string) {
-    const key = await this.em.findOne(ApiKey, { id: keyId } as any);
-    if (key) {
-      key.usageCount++;
-      key.todayUsage++;
-      key.lastUsedAt = new Date();
-      // Nếu dùng thành công thì reset status về Active (đề phòng trước đó bị Rate Limit)
-      if (key.status === ApiKeyStatus.RATE_LIMITED) {
-        key.status = ApiKeyStatus.ACTIVE;
-      }
-      await this.em.persistAndFlush(key);
-    }
+    return this.rotationService.logUsage(keyId);
   }
 
-  @CreateRequestContext()
-  async reportError(keyString: string, error: any) {
-    const key = await this.em.findOne(ApiKey, { key: keyString } as any);
-    if (!key) return;
-
-    key.lastErrorAt = new Date();
-    const errorMsg = error?.message || String(error);
-    key.lastErrorMessage = errorMsg;
-
-    // Phân loại lỗi
-    if (errorMsg.includes('429') || errorMsg.includes('Too Many Requests') || errorMsg.includes('RPM')) {
-      // Lỗi Rate Limit (Theo phút/giây) - khóa 1 phút
-      key.status = ApiKeyStatus.RATE_LIMITED;
-      key.cooldownUntil = new Date(Date.now() + 60 * 1000);
-    } else if (errorMsg.includes('Quota') || errorMsg.includes('RPD') || errorMsg.includes('403')) {
-      // Lỗi Hết Quota (Theo ngày) - khóa đến hết ngày
-      key.status = ApiKeyStatus.QUOTA_EXCEEDED;
-    } else {
-      // Các lỗi khác (Invalid Key, v.v.)
-      key.status = ApiKeyStatus.ERROR;
-    }
-
-    // [QUAN TRỌNG] Nếu có ProjectId, cập nhật trạng thái cho TẤT CẢ các Key cùng Project
-    if (key.projectId) {
-      const allKeysInProject = await this.em.find(ApiKey, { projectId: key.projectId } as any);
-      for (const pKey of allKeysInProject) {
-        pKey.status = key.status;
-        if (key.cooldownUntil) pKey.cooldownUntil = key.cooldownUntil;
-        pKey.lastErrorAt = key.lastErrorAt;
-        pKey.lastErrorMessage = `Project limit hit: ${errorMsg}`;
-      }
-    }
-
-    await this.em.persistAndFlush(key);
+  async reportError(keyId: string, error: any) {
+    return this.rotationService.reportError(keyId, error);
   }
 
-  // --- QUẢN LÝ KEY ---
+  // Crypto delegation for backward compatibility or direct use if needed
+  encrypt(text: string) { return this.cryptoService.encrypt(text); }
+  decrypt(text: string) { return this.cryptoService.decrypt(text); }
 
+  // Management logic
   @CreateRequestContext()
   async getMyKeys(user: User) {
     return this.em.find(ApiKey, { owner: user } as any);
   }
 
   @CreateRequestContext()
-  async upsertKey(user: User, keyData: { key: string; label?: string; projectId?: string; type?: ApiKeyType; maxDailyQuota?: number }) {
-    // Kiểm tra xem Key này đã tồn tại của User này chưa
+  async upsertKey(user: User, keyData: { key: string; label?: string; projectId?: string; type?: ApiKeyType; maxDailyQuota?: number; provider?: AIProviderType }) {
+    const provider = keyData.provider || AIProviderType.GEMINI;
+
+    const isValid = await this.validateApiKey(keyData.key, provider);
+    if (!isValid) throw new ForbiddenException(`Invalid API Key for provider ${provider}.`);
+
     let apiKey = await this.em.findOne(ApiKey, { owner: user, key: keyData.key } as any);
 
     if (apiKey) {
       if (keyData.maxDailyQuota) apiKey.maxDailyQuota = keyData.maxDailyQuota;
       if (keyData.label) apiKey.label = keyData.label;
       if (keyData.projectId) apiKey.projectId = keyData.projectId;
-      apiKey.status = ApiKeyStatus.ACTIVE; // Reset status khi cập nhật
+      apiKey.key = this.cryptoService.encrypt(keyData.key);
+      apiKey.status = ApiKeyStatus.ACTIVE;
     } else {
       apiKey = this.em.create(ApiKey, {
-        key: keyData.key,
+        key: this.cryptoService.encrypt(keyData.key),
         label: keyData.label,
         projectId: keyData.projectId,
         owner: user,
         type: keyData.type || ApiKeyType.PRIVATE,
+        provider: provider,
         maxDailyQuota: keyData.maxDailyQuota || 1500,
         status: ApiKeyStatus.ACTIVE,
       } as any);
@@ -158,11 +72,83 @@ export class ApiKeyService {
     return apiKey;
   }
 
+  private async validateApiKey(key: string, provider: AIProviderType): Promise<boolean> {
+    try {
+      const client = this.aiProviderFactory.createClient(provider, key);
+      await client.generateText('Hello', { maxTokens: 1, temperature: 0 });
+      return true;
+    } catch (error) {
+      this.logger.warn(`API Key validation failed for ${provider}: ${error.message}`);
+      return false;
+    }
+  }
+
   @CreateRequestContext()
   async removeKey(user: User, id: string) {
     const key = await this.em.findOne(ApiKey, { id, owner: user } as any);
-    if (key) {
-      await this.em.removeAndFlush(key);
+    if (key) await this.em.removeAndFlush(key);
+  }
+
+  @CreateRequestContext()
+  async getDashboard() {
+    const keys = await this.em.find(ApiKey, {});
+    const dashboard: Record<string, any> = {};
+    const alerts: string[] = [];
+
+    for (const key of keys) {
+      if (!dashboard[key.provider]) {
+        dashboard[key.provider] = {
+          provider: key.provider, totalKeys: 0, activeKeys: 0,
+          errorKeys: 0, quotaExceededKeys: 0, rateLimitedKeys: 0,
+          todayUsage: 0, maxDailyQuota: 0,
+        };
+      }
+      const stats = dashboard[key.provider];
+      stats.totalKeys++;
+      stats.todayUsage += key.todayUsage;
+      stats.maxDailyQuota += key.maxDailyQuota;
+      if (key.status === ApiKeyStatus.ACTIVE) stats.activeKeys++;
+      else if (key.status === ApiKeyStatus.ERROR) stats.errorKeys++;
+      else if (key.status === ApiKeyStatus.QUOTA_EXCEEDED) stats.quotaExceededKeys++;
+      else if (key.status === ApiKeyStatus.RATE_LIMITED) stats.rateLimitedKeys++;
     }
+
+    for (const p in dashboard) {
+      const stats = dashboard[p];
+      if (stats.activeKeys === 0) alerts.push(`CRITICAL: All keys for ${p} are down!`);
+      else if (stats.todayUsage > stats.maxDailyQuota * 0.9) alerts.push(`WARNING: ${p} usage > 90%!`);
+    }
+    return { stats: Object.values(dashboard), alerts };
+  }
+
+  @CreateRequestContext()
+  async testKey(id: string) {
+    const key = await this.em.findOne(ApiKey, { id } as any);
+    if (!key) throw new InternalServerErrorException('Key not found');
+    const startTime = Date.now();
+    try {
+      const decryptedKey = this.cryptoService.decrypt(key.key);
+      const client = this.aiProviderFactory.createClient(key.provider, decryptedKey);
+      await client.generateText('Hello', { maxTokens: 1, temperature: 0 });
+      return { success: true, latencyMs: Date.now() - startTime };
+    } catch (error) {
+      await this.rotationService.reportError(id, error);
+      return { success: false, error: error.message, latencyMs: Date.now() - startTime };
+    }
+  }
+
+  @CreateRequestContext()
+  async reactivateKey(id: string) {
+    const result = await this.testKey(id);
+    if (result.success) {
+      const key = await this.em.findOne(ApiKey, { id } as any);
+      if (key) {
+        key.status = ApiKeyStatus.ACTIVE;
+        key.errorType = undefined;
+        key.consecutiveErrors = 0;
+        await this.em.persistAndFlush(key);
+      }
+    }
+    return result;
   }
 }

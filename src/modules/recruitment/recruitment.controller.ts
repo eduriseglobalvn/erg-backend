@@ -1,6 +1,6 @@
 import {
     Controller, Get, Post, Body, Patch, Param, Delete, Put,
-    UseInterceptors, UploadedFile, BadRequestException, Query, UseGuards
+    UseInterceptors, UploadedFile, BadRequestException, Query, UseGuards, Req
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -13,6 +13,8 @@ import { UpdateCandidateStatusDto } from './dto/update-candidate-status.dto';
 import { JobQueryDto } from './dto/job-query.dto';
 import { JwtAuthGuard } from '@/core/guards/jwt-auth.guard';
 import { PermissionsGuard } from '@/modules/access-control/guards/permissions.guard';
+import type { Request } from 'express';
+import { SchemaMarkupService } from '@/modules/seo/services/schema-markup.service';
 
 const CV_ALLOWED_MIMES = [
     'application/pdf',
@@ -35,6 +37,7 @@ const cvUploadOptions = {
 export class RecruitmentController {
     constructor(
         private readonly recruitmentService: RecruitmentService,
+        private readonly schemaMarkupService: SchemaMarkupService,
     ) { }
 
     // ==========================
@@ -46,8 +49,15 @@ export class RecruitmentController {
     }
 
     @Get('jobs/:slug')
-    findJobBySlug(@Param('slug') slug: string) {
-        return this.recruitmentService.findJobBySlug(slug);
+    async findJobBySlug(@Param('slug') slug: string, @Req() req: Request) {
+        const job = await this.recruitmentService.findJobBySlug(slug);
+
+        const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+        const host = req.headers.host || 'erg.edu.vn';
+        const baseUrl = `${protocol}://${host}`;
+
+        const schema = this.schemaMarkupService.generateJobPostingSchema(job, baseUrl);
+        return { job, schema };
     }
 
     /**

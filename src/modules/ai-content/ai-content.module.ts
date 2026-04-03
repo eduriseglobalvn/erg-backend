@@ -1,4 +1,4 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { AiContentController } from './ai-content.controller';
@@ -6,37 +6,75 @@ import { ApiKeyController } from './controllers/api-key.controller';
 import { AiGenerationProcessor } from './processors/ai-generation.processor';
 import { ApiKeyService } from './services/api-key.service';
 import { AiContentService } from './services/ai-content.service';
-// 1. IMPORT SERVICE NÀY VÀO
-import { ImageGenService } from './services/image-gen.service';
+import { AiImageService } from './services/ai-image.service';
+import { AIProviderFactory } from './providers/ai-provider.factory';
+import { ProviderHealthService } from './services/provider-health.service';
+import { ApiKeyHealthService } from './services/api-key-health.service';
+import { AiRateLimiterService } from './services/ai-rate-limiter.service';
 import { ApiKey } from './entities/api-key.entity';
 import { User } from '@/modules/users/entities/user.entity';
+import { Post } from '@/modules/posts/entities/post.entity';
+import { PostCategory } from '@/modules/posts/entities/post-category.entity';
 import { UsersModule } from '@/modules/users/users.module';
-import { PostsModule } from '@/modules/posts/posts.module';
 import { SharedModule } from '@/shared/shared.module';
-import { SeoModule } from '@/modules/seo/seo.module';
 import { NotificationsModule } from '@/modules/notifications/notifications.module';
+import { CacheModule } from '@nestjs/cache-manager';
+import { ApiKeyCryptoService } from './services/api-key-crypto.service';
+import { ApiKeyRotationService } from './services/api-key-rotation.service';
+import { SeoCoreModule } from '@/modules/seo/seo-core.module';
+import { SeoTitleService } from '@/modules/seo/services/seo-title.service';
+import { SeoMetaService } from '@/modules/seo/services/seo-meta.service';
+import { SeoImageAltService } from '@/modules/seo/services/seo-image-alt.service';
+import { SeoBatchService } from '@/modules/seo/services/seo-batch.service';
+import { KeywordSuggestionService } from '@/modules/seo/services/keyword-suggestion.service';
+
+const isWorkerOrLocal = process.env.START_MODE === 'worker' || !process.env.START_MODE;
 
 @Module({
   imports: [
-    MikroOrmModule.forFeature([ApiKey, User]),
+    CacheModule.register(),
+    MikroOrmModule.forFeature([ApiKey, User, Post, PostCategory]),
     BullModule.registerQueue({
       name: 'ai-content-queue',
     }),
     UsersModule,
-
-    forwardRef(() => PostsModule),
     SharedModule,
-    forwardRef(() => SeoModule),
+    SeoCoreModule,
     NotificationsModule,
   ],
   controllers: [AiContentController, ApiKeyController],
   providers: [
-    AiGenerationProcessor,
+    ...(isWorkerOrLocal ? [AiGenerationProcessor] : []),
     ApiKeyService,
+    ApiKeyCryptoService,
+    ApiKeyRotationService,
     AiContentService,
-    // 2. ĐĂNG KÝ NÓ Ở ĐÂY THÌ PROCESSOR MỚI DÙNG ĐƯỢC
-    ImageGenService,
+    AiImageService,
+    AIProviderFactory,
+    ProviderHealthService,
+    ApiKeyHealthService,
+    AiRateLimiterService,
+    SeoTitleService,
+    SeoMetaService,
+    SeoImageAltService,
+    SeoBatchService,
+    KeywordSuggestionService,
   ],
-  exports: [ApiKeyService, AiContentService, ImageGenService],
+  exports: [
+    ApiKeyService,
+    ApiKeyCryptoService,
+    ApiKeyRotationService,
+    AiContentService,
+    AiImageService,
+    ProviderHealthService,
+    AIProviderFactory,
+    ApiKeyHealthService,
+    AiRateLimiterService,
+    SeoTitleService,
+    SeoMetaService,
+    SeoImageAltService,
+    SeoBatchService,
+    KeywordSuggestionService,
+  ],
 })
 export class AiContentModule { }

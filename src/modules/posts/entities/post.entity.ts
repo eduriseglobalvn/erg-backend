@@ -1,10 +1,12 @@
-import { Entity, Property, ManyToOne, Enum, OptionalProps } from '@mikro-orm/core';
+import { Entity, Property, ManyToOne, Enum, OptionalProps, Index } from '@mikro-orm/core';
 import { BaseEntity } from '@/core/base/base.entity';
-import { User } from '@/modules/users/entities/user.entity';
+import type { User } from '@/modules/users/entities/user.entity';
 import { PostCategory } from './post-category.entity';
 import { PostStatus } from '@/shared/enums/app.enum';
+import { IsUrl, IsOptional } from 'class-validator';
 
 @Entity({ tableName: 'posts' })
+@Index({ properties: ['status', 'category', 'createdAt'] })
 export class Post extends BaseEntity {
   @Property()
   title!: string;
@@ -28,24 +30,24 @@ export class Post extends BaseEntity {
   @Enum({ items: () => PostStatus, default: PostStatus.DRAFT })
   status: PostStatus = PostStatus.DRAFT;
 
-  @Property({ default: false })
+  @Property({ default: false, index: true })
   isPublished: boolean = false;
 
-  @Property({ nullable: true })
+  @Property({ nullable: true, index: true })
   publishedAt?: Date;
 
   // --- QUẢN LÝ NGƯỜI DÙNG ---
 
   // Người tạo bản ghi này (Admin hoặc AI)
-  @ManyToOne(() => User)
+  @ManyToOne('User')
   createdBy!: User;
 
   // Người duyệt đăng (Admin bấm nút Publish)
-  @ManyToOne(() => User, { nullable: true })
+  @ManyToOne('User', { nullable: true })
   publishedBy?: User;
 
   // Tác giả hiển thị trên bài viết (Có thể set là người khác)
-  @ManyToOne(() => User)
+  @ManyToOne('User')
   author!: User;
 
   @Property({ default: false })
@@ -59,7 +61,7 @@ export class Post extends BaseEntity {
   @Property({ default: 0 })
   commentCount: number = 0;
 
-  @ManyToOne(() => PostCategory)
+  @ManyToOne(() => PostCategory, { index: true })
   category!: PostCategory;
 
   // --- AI METADATA ---
@@ -67,7 +69,7 @@ export class Post extends BaseEntity {
   @Property({ type: 'text', nullable: true })
   aiPrompt?: string;
 
-  @Property({ nullable: true })
+  @Property({ nullable: true, index: true })
   aiJobId?: string;
 
   // --- SEO METADATA ---
@@ -84,6 +86,8 @@ export class Post extends BaseEntity {
   keywords?: string;
 
   @Property({ nullable: true })
+  @IsOptional()
+  @IsUrl({}, { message: 'Canonical URL must be a valid URL' })
   canonicalUrl?: string;
 
   @Enum({ items: () => SchemaType, nullable: true })
@@ -245,7 +249,7 @@ export class Post extends BaseEntity {
   };
 
   // --- SOFT DELETE ---
-  @Property({ nullable: true })
+  @Property({ nullable: true, index: true })
   deletedAt?: Date;
 
   [OptionalProps]?: 'seoScore' | 'readabilityScore' | 'keywordDensity' | 'viewCount' | 'commentCount' | 'isCreatedByAI' | 'isPublished' | 'robotsIndex' | 'robotsFollow' | 'robotsAdvanced';

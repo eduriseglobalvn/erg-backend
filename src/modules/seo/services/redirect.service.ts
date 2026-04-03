@@ -57,4 +57,9 @@ export class RedirectService {
         await this.em.removeAndFlush(redirect);
         return { success: true };
     }
+
+    async incrementHitCount(redirect: SeoRedirect) {
+        redirect.hitCount = (redirect.hitCount || 0) + 1;
+        await this.em.flush();
+    }
 }

@@ -19,13 +19,15 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request } from 'express'; // Nhớ import type
 
 import { UsersService } from './users.service';
+import { UserActivityService } from './services/user-activity.service';
 import { UpdateProfileDto, ChangePasswordDto, OnboardingDto } from './dto/user.dto';
-import { UpdateUserStatusDto, AssignRolesDto } from './dto/admin-user.dto';
+import { UpdateUserStatusDto, AssignRolesDto, QueryUsersDto } from './dto/admin-user.dto';
 import { ResponseMessage } from '@/core/decorators/response-message.decorator';
 import { ApiMessage } from '@/shared/enums/message.enum';
 import { JwtAuthGuard } from '@/core/guards/jwt-auth.guard';
 import { PermissionsGuard } from '@/modules/access-control/guards/permissions.guard';
 import { Permissions } from '@/modules/access-control/decorators/permissions.decorator';
+import { Auditable } from '@/modules/audit/decorators/auditable.decorator';
 
 // Interface mở rộng để tránh lỗi ESLint (Copy lại từ AuthController hoặc đưa vào file shared)
 interface RequestWithUser extends Request {
@@ -40,7 +42,10 @@ interface RequestWithUser extends Request {
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) { }
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly userActivityService: UserActivityService,
+  ) { }
 
   // 1. Xem hồ sơ cá nhân
   // GET /users/me
@@ -54,6 +59,7 @@ export class UsersController {
   // PATCH /users/me
   @Patch('me')
   @ResponseMessage(ApiMessage.UPDATE_PROFILE_SUCCESS)
+  @Auditable({ action: 'UPDATE_PROFILE', resourceType: 'User' })
   updateProfile(@Req() req: RequestWithUser, @Body() dto: UpdateProfileDto) {
     return this.usersService.updateProfile(
       req.user.sub,
@@ -65,6 +71,7 @@ export class UsersController {
   // 2.1 Onboarding (Cập nhật hồ sơ + Avatar)
   @Post('onboarding')
   @UseInterceptors(FileInterceptor('avatar'))
+  @Auditable({ action: 'ONBOARDING', resourceType: 'User' })
   @ResponseMessage(ApiMessage.UPDATE_PROFILE_SUCCESS)
   onboarding(
     @Req() req: RequestWithUser,
@@ -83,6 +90,7 @@ export class UsersController {
   // PUT /users/me/password
   @Put('me/password')
   @ResponseMessage(ApiMessage.CHANGE_PASSWORD_SUCCESS)
+  @Auditable({ action: 'CHANGE_PASSWORD', resourceType: 'User' })
   changePassword(@Req() req: RequestWithUser, @Body() dto: ChangePasswordDto) {
     return this.usersService.changePassword(req.user.sub, dto);
   }
@@ -99,29 +107,52 @@ export class UsersController {
   // DELETE /users/me/sessions/:id
   @Delete('me/sessions/:id')
   @ResponseMessage(ApiMessage.REVOKE_SESSION_SUCCESS)
+  @Auditable({ action: 'REVOKE_SESSION', resourceType: 'User' })
   revokeSession(@Req() req: RequestWithUser, @Param('id') sessionId: string) {
     return this.usersService.revokeSession(req.user.sub, sessionId);
   }
 
+
   // --- ADMIN AREA ---
 
   // 6. Lấy danh sách users (Có phân trang) - Chỉ Admin
-  // GET /users?page=1&limit=10
+  // GET /users?page=1&limit=10&search=...
   @Get()
   @UseGuards(PermissionsGuard)
   @Permissions('users.read')
-  findAll(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
-  ) {
-    return this.usersService.findAllUsers(page, limit);
+  findAll(@Query() query: QueryUsersDto) {
+    return this.usersService.findAllUsers(query);
   }
 
-  // 7. Admin: Update User Status (Block/Ban/Active)
+  // 7. Admin: Get User Detail
+  // GET /users/:id
+  @Get(':id')
+  @UseGuards(PermissionsGuard)
+  @Permissions('users.read')
+  findOne(@Param('id') id: string) {
+    return this.usersService.findOneAdminView(id);
+  }
+
+  // 8. Admin: Get User Activity Log
+  // GET /users/:id/activity?page=1&limit=10&action=...
+  @Get(':id/activity')
+  @UseGuards(PermissionsGuard)
+  @Permissions('users.read') // Có thể dùng quyền riêng như users.activity.read
+  getUserActivity(
+    @Param('id') id: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('action') action?: string,
+  ) {
+    return this.userActivityService.getUserActivity(id, page, limit, action);
+  }
+
+  // 9. Admin: Update User Status (Block/Ban/Active)
   // PUT /users/:id/status
   @Put(':id/status')
   @UseGuards(PermissionsGuard)
   @Permissions('users.update')
+  @Auditable({ action: 'UPDATE_USER_STATUS', resourceType: 'User' })
   @ResponseMessage(ApiMessage.UPDATE_PROFILE_SUCCESS)
   updateStatus(@Param('id') id: string, @Body() dto: UpdateUserStatusDto) {
     return this.usersService.updateUserStatus(id, dto);
@@ -132,9 +163,30 @@ export class UsersController {
   @Post(':id/roles')
   @UseGuards(PermissionsGuard)
   @Permissions('users.update') // Hoặc permission riêng: roles.assign
+  @Auditable({ action: 'ASSIGN_USER_ROLES', resourceType: 'User' })
   @ResponseMessage('Roles assigned successfully')
   assignRoles(@Param('id') id: string, @Body() dto: AssignRolesDto) {
     return this.usersService.assignRoles(id, dto);
+  }
+
+  // 8.1 Admin: Direct Permissions Overrides (GRANT/DENY)
+  // POST /users/:id/permissions
+  @Post(':id/permissions')
+  @UseGuards(PermissionsGuard)
+  @Permissions('roles.assign')
+  @Auditable({ action: 'ASSIGN_DIRECT_PERMISSIONS', resourceType: 'User' })
+  @ResponseMessage('Direct permissions assigned successfully')
+  assignDirectPermissions(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() dto: { grantIds?: string[], denyIds?: string[] }
+  ) {
+    return this.usersService.assignDirectPermissions(
+      req.user.sub,
+      id,
+      dto.grantIds || [],
+      dto.denyIds || []
+    );
   }
 
   // 9. Admin: Delete User (Hard Delete)
@@ -142,6 +194,7 @@ export class UsersController {
   @Delete(':id')
   @UseGuards(PermissionsGuard)
   @Permissions('users.delete')
+  @Auditable({ action: 'DELETE_USER', resourceType: 'User' })
   @ResponseMessage('User deleted successfully')
   deleteUser(@Param('id') id: string) {
     return this.usersService.deleteUser(id);

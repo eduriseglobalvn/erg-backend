@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException, UnauthorizedException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@mikro-orm/nestjs';
 import { EntityRepository } from '@mikro-orm/core';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
@@ -12,6 +12,8 @@ import { UserStatus } from '@/shared/enums/app.enum';
 
 @Injectable()
 export class SessionsService {
+  private readonly logger = new Logger(SessionsService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepo: EntityRepository<User>,
@@ -22,19 +24,17 @@ export class SessionsService {
   ) { }
   async onModuleInit() {
     try {
-      console.log('🔄 Đang thử kết nối Redis...');
+      this.logger.log('Đang thử kết nối Redis...');
       await this.cacheManager.set('test_redis_connection', 'OK', 10000); // 10s
       const value = await this.cacheManager.get('test_redis_connection');
 
       if (value === 'OK') {
-        console.log('✅ KẾT NỐI REDIS THÀNH CÔNG! Cache đang hoạt động.');
+        this.logger.log('KẾT NỐI REDIS THÀNH CÔNG! Cache đang hoạt động.');
       } else {
-        console.error(
-          '❌ Redis không lưu được dữ liệu (Có thể đang fallback về Memory)',
-        );
+        this.logger.error('Redis không lưu được dữ liệu (Có thể đang fallback về Memory)');
       }
     } catch (e) {
-      console.error('❌ Lỗi kết nối Redis:', e);
+      this.logger.error('Lỗi kết nối Redis', e);
     }
   }
   async getCurrentSessionContext(

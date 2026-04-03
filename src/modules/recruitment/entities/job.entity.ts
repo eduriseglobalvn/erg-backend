@@ -8,6 +8,13 @@ export enum JobStatus {
     NORMAL = 'normal',
 }
 
+export enum EmploymentType {
+    FULL_TIME = 'FULL_TIME',
+    PART_TIME = 'PART_TIME',
+    CONTRACT = 'CONTRACT',
+    INTERN = 'INTERN',
+}
+
 @Entity({ tableName: 'jobs' })
 export class Job {
     @PrimaryKey()
@@ -53,8 +60,33 @@ export class Job {
     @Property()
     deadline: string; // Stored as string for flexibility or Date if preferred
 
+    @Property({ nullable: true })
+    deadlineDate?: Date; // For schema.org validThrough
+
     @Property()
     location: string;
+
+    // --- SCHEMA.ORG FIELDS ---
+    @Enum({ items: () => EmploymentType, nullable: true })
+    employmentType?: EmploymentType = EmploymentType.FULL_TIME;
+
+    @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
+    salaryMin?: number;
+
+    @Property({ type: 'decimal', precision: 15, scale: 2, nullable: true })
+    salaryMax?: number;
+
+    @Property({ default: 'VND' })
+    salaryCurrency: string = 'VND';
+
+    @Property({ nullable: true })
+    streetAddress?: string;
+
+    @Property({ nullable: true })
+    city?: string;
+
+    @Property({ default: 'VN' })
+    country: string = 'VN';
 
     @Property({ type: 'text', nullable: true })
     summary: string;

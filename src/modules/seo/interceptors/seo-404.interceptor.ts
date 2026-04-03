@@ -4,6 +4,7 @@ import {
     ExecutionContext,
     CallHandler,
     NotFoundException,
+    Logger,
 } from '@nestjs/common';
 import { Observable, throwError } from 'rxjs';
 import { catchError } from 'rxjs/operators';
@@ -11,6 +12,8 @@ import { MonitoringService } from '../services/monitoring.service';
 
 @Injectable()
 export class Seo404Interceptor implements NestInterceptor {
+    private readonly logger = new Logger(Seo404Interceptor.name);
+
     constructor(private readonly monitoringService: MonitoringService) { }
 
     intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
@@ -25,7 +28,7 @@ export class Seo404Interceptor implements NestInterceptor {
                         request.headers['user-agent'] as string,
                     ).catch(err => {
                         // Silent fail for logging
-                        console.error('Failed to log 404 event:', err);
+                        this.logger.error('Failed to log 404 event', err);
                     });
                 }
                 return throwError(() => error);

@@ -14,6 +14,7 @@ import { UserSession } from '@/modules/sessions/entities/user-session.entity';
 import { Role } from '@/modules/access-control/entities/role.entity';
 import { AuthActivityLog } from './entities/auth-activity-log.entity';
 import { SessionsModule } from '@/modules/sessions/sessions.module';
+import { OperationsModule } from '@/modules/operations/operations.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { SessionsModule } from '@/modules/sessions/sessions.module';
     // 2. Đăng ký Entity cho MongoDB (Log) - QUAN TRỌNG: contextName
     MikroOrmModule.forFeature([AuthActivityLog], 'mongo-connection'),
     SessionsModule,
+    OperationsModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, AccessTokenStrategy, RefreshTokenStrategy],

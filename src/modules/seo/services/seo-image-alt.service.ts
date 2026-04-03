@@ -1,7 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { AiContentService } from '@/modules/ai-content/services/ai-content.service';
 import { User } from '@/modules/users/entities/user.entity';
+import { AIProviderType } from '@/modules/ai-content/entities/api-key.entity';
 import * as cheerio from 'cheerio';
+import * as crypto from 'crypto';
 
 export interface ImageAltSuggestion {
     imageUrl: string;
@@ -12,8 +16,11 @@ export interface ImageAltSuggestion {
 
 @Injectable()
 export class SeoImageAltService {
+    private readonly logger = new Logger(SeoImageAltService.name);
+
     constructor(
-        private readonly aiContentService: AiContentService
+        private readonly aiContentService: AiContentService,
+        @Inject(CACHE_MANAGER) private cacheManager: Cache
     ) { }
 
     async generateAltTexts(
@@ -41,8 +48,8 @@ export class SeoImageAltService {
             });
         });
 
-        // Generate alt text for each image without alt
-        for (const img of images) {
+        // Sprint 41: Optimize with parallel processing (Promise.all) instead of sequential
+        await Promise.all(images.map(async (img) => {
             if (!img.originalAlt) { // Only generate if missing
                 img.suggestedAlt = await this.generateSingleAltText(
                     img.context,
@@ -51,7 +58,7 @@ export class SeoImageAltService {
                     user
                 );
             }
-        }
+        }));
 
         return images.filter(img => img.suggestedAlt); // Return only images with suggestions
     }
@@ -62,6 +69,13 @@ export class SeoImageAltService {
         imageUrl: string,
         user: User
     ): Promise<string> {
+        // Sprint 41: Cache expensive AI operations
+        const contextHash = crypto.createHash('sha256').update(context + keyword + imageUrl).digest('hex');
+        const cacheKey = `seo:alt:${contextHash}`;
+
+        const cached = await this.cacheManager.get<string>(cacheKey);
+        if (cached) return cached;
+
         // Try to extract meaningful info from filename
         const filename = imageUrl.split('/').pop()?.split('?')[0] || '';
         const filenameContext = filename.replace(/[-_]/g, ' ').replace(/\.\w+$/, '');
@@ -85,14 +99,23 @@ Chỉ trả về alt text, không giải thích.
     `;
 
         try {
-            const altText = await this.aiContentService.refineText(
-                context,
-                instruction,
-                user
-            );
-            return altText.trim().substring(0, 125); // Enforce max length
+            const prompt = `\n${instruction}\n\n[Original Content]\n${context}`;
+            const altText = await this.aiContentService.generateWithFallback(prompt, user, {
+                systemPrompt: "You are an expert SEO specialist creating compact alt text suitable for visually impaired users.",
+                temperature: 0.6,
+                maxTokens: 50,
+                preferredProviders: [
+                    AIProviderType.GROQ,
+                    AIProviderType.CEREBRAS,
+                    AIProviderType.TOGETHER
+                ]
+            });
+
+            const finalAlt = altText.trim().substring(0, 125);
+            await this.cacheManager.set(cacheKey, finalAlt, 7 * 24 * 3600 * 1000); // 7 days cache
+            return finalAlt;
         } catch (error) {
-            // Fallback to filename-based alt if AI fails
+            this.logger.error(`Alt text generation failed for ${imageUrl}: ${error.message}`);
             return filenameContext.substring(0, 125);
         }
     }

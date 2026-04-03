@@ -1,6 +1,11 @@
-import { Controller, Get, Post, Delete, Body, Param, Query, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { RedirectsService } from './services/redirects.service';
+import { JwtAuthGuard } from '@/core/guards/jwt-auth.guard';
+import { PermissionsGuard } from '@/modules/access-control/guards/permissions.guard';
+import { Permissions } from '@/modules/access-control/decorators/permissions.decorator';
 
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@Permissions('seo.manage')
 @Controller('seo/redirects')
 export class RedirectsController {
     constructor(private readonly redirectsService: RedirectsService) { }

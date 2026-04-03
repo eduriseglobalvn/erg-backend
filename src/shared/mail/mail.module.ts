@@ -6,6 +6,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { join } from 'path';
 import { MailService } from './mail.service';
 import { MailProcessor } from './mail.processor';
+import { NotificationsModule } from '@/modules/notifications/notifications.module';
 
 @Global()
 @Module({
@@ -40,8 +41,10 @@ import { MailProcessor } from './mail.processor';
     BullModule.registerQueue({
       name: 'mail_queue',
     }),
+    // 3. Notifications for error reporting in processor
+    NotificationsModule,
   ],
   providers: [MailService, MailProcessor],
   exports: [MailService],
 })
-export class MailModule {}
+export class MailModule { }

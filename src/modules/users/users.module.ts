@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MikroOrmModule } from '@mikro-orm/nestjs';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
+import { UserActivityService } from './services/user-activity.service';
 
 // Entities
 import { User } from './entities/user.entity';
@@ -16,7 +17,7 @@ import { SessionsModule } from '@/modules/sessions/sessions.module';
     SessionsModule,
   ],
   controllers: [UsersController],
-  providers: [UsersService],
-  exports: [UsersService], // Export để AuthModule hoặc các module khác dùng lại
+  providers: [UsersService, UserActivityService],
+  exports: [UsersService, UserActivityService], // Export để AuthModule hoặc các module khác dùng lại
 })
 export class UsersModule { }

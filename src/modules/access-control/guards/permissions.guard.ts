@@ -1,11 +1,12 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { EntityManager } from '@mikro-orm/core';
 import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { User } from '@/modules/users/entities/user.entity';
-
+import { UserPermission } from '../entities/user-permission.entity';
 @Injectable()
 export class PermissionsGuard implements CanActivate {
-    constructor(private reflector: Reflector) { }
+    constructor(private reflector: Reflector, private readonly em: EntityManager) { }
 
     canActivate(context: ExecutionContext): boolean {
         const requiredPermissions = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [

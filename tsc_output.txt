@@ -1,0 +1,21 @@
+src/modules/operations/ip-protection.service.ts(59,20): error TS2345: Argument of type '{ ip: string; ttlRemainingMs: string | number; }' is not assignable to parameter of type 'never'.
+src/modules/operations/ip-protection.service.ts(74,20): error TS2345: Argument of type '{ ip: string; count: number; }' is not assignable to parameter of type 'never'.
+src/modules/recruitment/recruitment.service.ts(31,47): error TS2345: Argument of type '{ status: JobStatus; summary: string; isActive: boolean; isHot: boolean; isNew: boolean; isUrgent: boolean; viewCount: number; createdAt: Date; updatedAt: Date; title: string; ... 10 more ...; benefits: string[]; }' is not assignable to parameter of type 'RequiredEntityData<Job, never, false>'.
+  Type '{ status: JobStatus; summary: string; isActive: boolean; isHot: boolean; isNew: boolean; isUrgent: boolean; viewCount: number; createdAt: Date; updatedAt: Date; title: string; ... 10 more ...; benefits: string[]; }' is missing the following properties from type '{ slug: string; title: string; status: JobStatus; isHot: boolean; isNew: boolean; isUrgent: boolean; salary: string; quantity: number; viewCount: number; workType: string; deadline: string; ... 9 more ...; updatedAt: string | Date; }': salaryCurrency, country
+src/modules/seo/seo.controller.ts(20,10): error TS2300: Duplicate identifier 'Report404Dto'.
+src/modules/seo/seo.controller.ts(21,10): error TS2300: Duplicate identifier 'Report404Dto'.
+src/modules/sitemap/sitemap.controller.ts(37,33): error TS1272: A type referenced in a decorated signature must be imported with 'import type' or a namespace import when 'isolatedModules' and 'emitDecoratorMetadata' are enabled.
+src/modules/sitemap/sitemap.controller.ts(37,54): error TS1272: A type referenced in a decorated signature must be imported with 'import type' or a namespace import when 'isolatedModules' and 'emitDecoratorMetadata' are enabled.
+src/modules/sitemap/sitemap.controller.ts(71,38): error TS1272: A type referenced in a decorated signature must be imported with 'import type' or a namespace import when 'isolatedModules' and 'emitDecoratorMetadata' are enabled.
+src/modules/sitemap/sitemap.controller.ts(71,59): error TS1272: A type referenced in a decorated signature must be imported with 'import type' or a namespace import when 'isolatedModules' and 'emitDecoratorMetadata' are enabled.
+src/modules/sitemap/sitemap.controller.ts(78,37): error TS1272: A type referenced in a decorated signature must be imported with 'import type' or a namespace import when 'isolatedModules' and 'emitDecoratorMetadata' are enabled.
+src/modules/sitemap/sitemap.controller.ts(78,58): error TS1272: A type referenced in a decorated signature must be imported with 'import type' or a namespace import when 'isolatedModules' and 'emitDecoratorMetadata' are enabled.
+src/modules/sitemap/sitemap.controller.ts(109,36): error TS18047: 'u' is possibly 'null'.
+src/modules/sitemap/sitemap.controller.ts(110,21): error TS18047: 'u' is possibly 'null'.
+src/modules/sitemap/sitemap.controller.ts(110,23): error TS2339: Property 'lastmod' does not exist on type '{ loc: string; changefreq: string; priority: number; title: string; }'.
+src/modules/sitemap/sitemap.controller.ts(110,55): error TS18047: 'u' is possibly 'null'.
+src/modules/sitemap/sitemap.controller.ts(110,57): error TS2339: Property 'lastmod' does not exist on type '{ loc: string; changefreq: string; priority: number; title: string; }'.
+src/modules/sitemap/sitemap.controller.ts(111,21): error TS18047: 'u' is possibly 'null'.
+src/modules/sitemap/sitemap.controller.ts(111,61): error TS18047: 'u' is possibly 'null'.
+src/modules/sitemap/sitemap.controller.ts(112,21): error TS18047: 'u' is possibly 'null'.
+src/modules/sitemap/sitemap.controller.ts(112,57): error TS18047: 'u' is possibly 'null'.

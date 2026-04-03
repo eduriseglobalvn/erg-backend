@@ -6,6 +6,7 @@ import { PostsController } from './posts.controller';
 import { CategoriesController } from './categories.controller';
 import { Post } from './entities/post.entity';
 import { PostCategory } from './entities/post-category.entity';
+import { AuthModule } from '@/modules/auth/auth.module';
 import { SeoModule } from '@/modules/seo/seo.module';
 import { NotificationsModule } from '@/modules/notifications/notifications.module';
 
@@ -14,11 +15,13 @@ import { NotificationsModule } from '@/modules/notifications/notifications.modul
     MikroOrmModule.forFeature([Post, PostCategory]),
     forwardRef(() => SeoModule),
 
+
+    AuthModule, // Added AuthModule
     NotificationsModule,
     ReviewsModule, // Import to use ReviewsService
   ],
   controllers: [CategoriesController, PostsController],
   providers: [PostsService],
-  exports: [PostsService], // Export để module khác (như AI) dùng lại service
+  exports: [PostsService, MikroOrmModule], // Export MikroOrmModule to share PostRepository
 })
 export class PostsModule { }

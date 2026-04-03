@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   BadRequestException,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@mikro-orm/nestjs';
@@ -30,9 +31,12 @@ import { ResendPinDto, VerifyPinDto } from '@/modules/auth/dto/verify-pin.dto';
 import { MailService } from '@/shared/mail/mail.service';
 // [UPDATE] Import SessionsService
 import { SessionsService } from '@/modules/sessions/sessions.service';
+import { AbuseDetectionService } from '@/modules/operations/abuse-detection.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepo: EntityRepository<User>,
@@ -48,6 +52,7 @@ export class AuthService {
 
     // [UPDATE] Inject SessionsService để xử lý Redis Cache
     private readonly sessionsService: SessionsService,
+    private readonly abuseDetection: AbuseDetectionService,
   ) { }
 
   // --- 1. ĐĂNG KÝ ---
@@ -72,6 +77,7 @@ export class AuthService {
       pinExpiresAt: pinExpires,
       isProfileCompleted: false,
       tokenVersion: 0,
+      loginCount: 0,
     });
 
     // [RBAC] Gán Role User
@@ -98,9 +104,10 @@ export class AuthService {
 
   // --- 2. ĐĂNG NHẬP ---
   async login(dto: LoginDto, ip: string, ua: string) {
-    const user = await this.userRepo.findOne({ email: dto.email });
+    const user = await this.userRepo.findOne({ email: dto.email }, { populate: ['roles'] });
 
     if (!user) {
+      await this.abuseDetection.trackFailedLogin(ip);
       this.logActivity('unknown', dto.email, 'FAILED_LOGIN', ip, ua, {
         reason: 'User not found',
       });
@@ -109,6 +116,7 @@ export class AuthService {
 
     const isPasswordValid = await argon2.verify(user.password!, dto.password);
     if (!isPasswordValid) {
+      await this.abuseDetection.trackFailedLogin(ip);
       this.logActivity(user.id, dto.email, 'FAILED_LOGIN', ip, ua, {
         reason: 'Wrong password',
       });
@@ -124,6 +132,11 @@ export class AuthService {
     }
 
     this.logActivity(user.id, user.email, 'LOGIN', ip, ua);
+
+    // Update login stats
+    user.lastLoginAt = new Date();
+    user.loginCount = (user.loginCount || 0) + 1;
+    await this.userRepo.getEntityManager().flush();
 
     // Gọi hàm generateTokens (đã bao gồm logic tạo session DB)
     return this.generateTokens(user, ip, ua);
@@ -157,7 +170,7 @@ export class AuthService {
     ip: string,
     ua: string,
   ) {
-    const user = await this.userRepo.findOne(userId);
+    const user = await this.userRepo.findOne(userId, { populate: ['roles'] });
     if (!user) throw new ForbiddenException('Access Denied');
 
     const session = await this.sessionRepo.findOne({ refreshToken: oldRefreshToken });
@@ -197,7 +210,7 @@ export class AuthService {
 
   // --- 5. XÁC THỰC PIN ---
   async verifyPin(dto: VerifyPinDto, ip: string, ua: string) {
-    const user = await this.userRepo.findOne({ email: dto.email });
+    const user = await this.userRepo.findOne({ email: dto.email }, { populate: ['roles'] });
     if (!user) throw new BadRequestException('User not found');
 
     if (user.status === UserStatus.ACTIVE) {
@@ -210,6 +223,10 @@ export class AuthService {
       user.status = UserStatus.ACTIVE;
       user.activationPin = undefined;
       user.pinExpiresAt = undefined;
+
+      // Update login stats (auto-login after verify)
+      user.lastLoginAt = new Date();
+      user.loginCount = (user.loginCount || 0) + 1;
       await this.userRepo.getEntityManager().flush();
     }
 
@@ -349,11 +366,19 @@ export class AuthService {
   }
 
   private async generateJwtPair(user: User, sessionId: string) {
+    let primaryRole = 'user';
+    if (user.roles && user.roles.isInitialized()) {
+      const roleNames = user.roles.getItems().map(r => r.name);
+      if (roleNames.length > 0) primaryRole = roleNames[0];
+    } else if (user.roles && user.roles.getItems().length > 0) {
+      primaryRole = user.roles.getItems()[0].name;
+    }
+
     const payload = {
       sub: user.id,
       email: user.email,
       sessionId: sessionId, // <-- Session ID đã được truyền vào
-      role: 'user',
+      role: primaryRole,
       status: user.status,
     };
 
@@ -397,7 +422,7 @@ export class AuthService {
 
       await this.mongoEm.fork().persistAndFlush(log);
     } catch (e) {
-      console.error('Failed to write auth log', e);
+      this.logger.error('Failed to write auth log', e);
     }
   }
 }

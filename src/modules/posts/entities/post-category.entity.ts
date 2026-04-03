@@ -26,6 +26,13 @@ export class PostCategory extends BaseEntity {
   @Property({ nullable: true })
   keywords?: string;
 
+  // --- HIDDEN SYSTEM ---
+  @Property({ default: false })
+  isHidden: boolean = false;
+
+  @Property({ nullable: true })
+  hiddenType?: string; // e.g. 'tips', 'reference', 'scrape-pool'
+
   @OneToMany(() => Post, (post) => post.category)
   posts = new Collection<Post>(this);
 }

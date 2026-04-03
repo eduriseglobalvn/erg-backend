@@ -1,11 +1,11 @@
 import { Entity, Property, ManyToOne } from '@mikro-orm/core';
 import { BaseEntity } from '@/core/base/base.entity';
-import { User } from '@/modules/users/entities/user.entity';
+import type { User } from '@/modules/users/entities/user.entity';
 
 @Entity({ tableName: 'user_sessions' })
 export class UserSession extends BaseEntity {
   // Quan hệ N-1: Một session thuộc về 1 User
-  @ManyToOne(() => User)
+  @ManyToOne('User')
   user!: User;
 
   // Token dùng để cấp lại Access Token mới.

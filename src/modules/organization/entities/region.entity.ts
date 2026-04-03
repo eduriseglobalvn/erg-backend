@@ -6,8 +6,8 @@ import {
   Collection,
 } from '@mikro-orm/core';
 import { BaseEntity } from '@/core/base/base.entity';
-import { User } from '@/modules/users/entities/user.entity';
-import { School } from '@/modules/organization/entities/school.entity';
+import type { User } from '@/modules/users/entities/user.entity';
+import type { School } from '@/modules/organization/entities/school.entity';
 
 @Entity({ tableName: 'regions' })
 export class Region extends BaseEntity {
@@ -17,9 +17,9 @@ export class Region extends BaseEntity {
   @Property({ unique: true })
   code!: string;
 
-  @ManyToOne(() => User, { nullable: true })
+  @ManyToOne('User', { nullable: true })
   manager?: User; // Giám đốc vùng
 
-  @OneToMany(() => School, (school) => school.region)
+  @OneToMany('School', (school: any) => school.region)
   schools = new Collection<School>(this);
 }

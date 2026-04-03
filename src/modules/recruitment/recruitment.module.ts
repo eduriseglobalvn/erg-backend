@@ -5,10 +5,12 @@ import { RecruitmentController } from './recruitment.controller';
 import { Job } from './entities/job.entity';
 import { Candidate } from './entities/candidate.entity';
 import { StorageService } from '@/shared/services/storage.service';
+import { SeoModule } from '@/modules/seo/seo.module';
 
 @Module({
     imports: [
         MikroOrmModule.forFeature([Job, Candidate]),
+        SeoModule,
     ],
     controllers: [RecruitmentController],
     providers: [RecruitmentService, StorageService],

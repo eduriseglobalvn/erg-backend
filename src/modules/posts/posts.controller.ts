@@ -5,10 +5,12 @@ import { PostsService } from './posts.service';
 import { StorageService } from '@/shared/services/storage.service';
 import { CreatePostDto } from './dto/create-post.dto';
 import { UpdatePostDto } from './dto/update-post.dto';
+import { SavePreviewDto } from './dto/save-preview.dto';
 import { PostQueryDto } from './dto/post-query.dto';
 import { JwtAuthGuard } from '@/core/guards/jwt-auth.guard';
 import { PermissionsGuard } from '@/modules/access-control/guards/permissions.guard';
 import { Permissions } from '@/modules/access-control/decorators/permissions.decorator';
+import { Auditable } from '@/modules/audit/decorators/auditable.decorator';
 
 @Controller('posts')
 export class PostsController {
@@ -17,15 +19,12 @@ export class PostsController {
     private readonly storageService: StorageService,
   ) { }
 
-  // ==========================================
-  // [NEW] QUẢN LÝ ẢNH (UPLOAD & DELETE)
-  // Phải đặt TRƯỚC các route có :id để tránh bị nhận nhầm là Param
-  // ==========================================
   @Post('images/upload')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('posts.create', 'posts.update')
+  @Auditable({ action: 'upload_image', resourceType: 'posts' })
   @UseInterceptors(FileInterceptor('file', {
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    limits: { fileSize: 5 * 1024 * 1024 },
   }))
   async uploadImage(@UploadedFile() file: Express.Multer.File) {
     if (!file) throw new BadRequestException('No file provided');
@@ -35,67 +34,29 @@ export class PostsController {
     }
     const originalName = file.originalname.split('.').slice(0, -1).join('.');
     const url = await this.storageService.processAndUpload(file.buffer, 'posts', originalName);
-    return {
-      statusCode: 200,
-      message: 'Upload successful',
-      data: { url }
-    };
+    return { statusCode: 200, message: 'Upload successful', data: { url } };
   }
 
   @Delete('images')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('posts.delete', 'posts.update')
+  @Auditable({ action: 'delete_image', resourceType: 'posts' })
   async deleteImage(@Body('url') url: string) {
-    console.log(`[Backend] Received DELETE request for URL:`, url);
     if (!url) throw new BadRequestException('URL is required');
     const allowedPrefix = 'https://media.erg.edu.vn/posts/';
-    if (!url.startsWith(allowedPrefix)) {
-      throw new BadRequestException('Invalid URL: Only media.erg.edu.vn/posts/ URLs are allowed');
-    }
-    // 3. Extract & Security (Prevent path traversal)
+    if (!url.startsWith(allowedPrefix)) throw new BadRequestException('Invalid URL');
     const filename = url.replace(allowedPrefix, '');
-
-    // Chỉ chặn ".." để tránh thoát ra khỏi bucket, còn "/" thì cho phép để hỗ trợ sub-folders
-    if (!filename || filename.includes('..')) {
-      throw new BadRequestException('Invalid filename or security risk detected');
-    }
-
-    await this.storageService.deleteFile(url);
-    return {
-      statusCode: 200,
-      message: 'Deleted successfully'
-    };
-  }
-
-  // Xóa ảnh theo ID (Filename) - Path: /posts/images/id/:filename
-  @Delete('images/id/:filename')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @Permissions('posts.delete', 'posts.update')
-  async deleteImageByPath(@Param('filename') filename: string) {
-    if (!filename) throw new BadRequestException('Filename is required');
-
-    // Chống tấn công path traversal
-    if (filename.includes('..') || filename.includes('/')) {
+    if (!filename || filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
       throw new BadRequestException('Invalid filename');
     }
-
-    // Build URL để dùng lại logic của service
-    const fullUrl = `https://media.erg.edu.vn/posts/${filename}`;
-    await this.storageService.deleteFile(fullUrl);
-
-    return {
-      statusCode: 200,
-      message: 'Deleted successfully'
-    };
+    await this.storageService.deleteFile(url);
+    return { statusCode: 200, message: 'Deleted successfully' };
   }
 
-  // ==========================================
-  // [NEW] XEM TRƯỚC BÀI VIẾT (PREVIEW)
-  // ==========================================
   @Post('preview')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('posts.create', 'posts.update')
-  async savePreview(@Body() body: any) {
+  async savePreview(@Body() body: SavePreviewDto) {
     const { id, ...data } = body;
     const previewId = await this.postsService.savePreviewDraft(data, id);
     return { id: previewId };
@@ -106,30 +67,35 @@ export class PostsController {
     return this.postsService.getPreviewDraft(id);
   }
 
-  // ==========================================
-  // 1. TẠO BÀI VIẾT (MANUAL CREATE)
-  // API: POST /posts
-  // ==========================================
   @Post()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('posts.create')
+  @Auditable({ action: 'create', resourceType: 'posts' })
   create(@Body() createPostDto: CreatePostDto, @Req() req: any) {
-    const user = req.user;
-    return this.postsService.create(createPostDto, user);
+    return this.postsService.create(createPostDto, req.user);
   }
 
-  // ==========================================
-  // 2. LẤY DANH SÁCH (PAGINATION & SEARCH)
-  // API: GET /posts?page=1&limit=10&search=...
-  // ==========================================
   @Get()
   findAll(@Query() query: PostQueryDto) {
     return this.postsService.findAll(query);
   }
 
-  // ==========================================
-  // 3. QUẢN LÝ THÙNG RÁC (XEM TRƯỚC ID)
-  // ==========================================
+  @Get('hidden')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('posts.manage_hidden', 'system.manage')
+  getHiddenPosts(@Query() query: PostQueryDto) {
+    return this.postsService.findHiddenPosts(query);
+  }
+
+  @Post(':id/promote')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('posts.manage_hidden', 'system.manage')
+  @Auditable({ action: 'promote', resourceType: 'posts' })
+  promoteToPublic(@Param('id') id: string, @Body('categoryId') categoryId: string, @Req() req: any) {
+    if (!categoryId) throw new BadRequestException('categoryId is required');
+    return this.postsService.promoteToPublic(id, categoryId, req.user);
+  }
+
   @Get('trash')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('posts.delete')
@@ -137,22 +103,13 @@ export class PostsController {
     return this.postsService.findDeleted(query);
   }
 
-  // ==========================================
-  // 4. LẤY CHI TIẾT (GET DETAIL)
-  // API: GET /posts/:id
-  // Dùng cho cả Frontend hiển thị và Admin Edit
-  // ==========================================
-  // Lấy bài viết theo Slug (Dành cho SEO/Frontend) - Phải đặt TRƯỚC :id
-  // Lấy bài viết theo Slug (Dành cho SEO/Frontend) - Phải đặt TRƯỚC :id
   @Get('slug/:slug')
   @UseInterceptors(CacheInterceptor)
-  @CacheTTL(300) // 5 minutes
+  @CacheTTL(300)
   findBySlug(@Param('slug') slug: string) {
     return this.postsService.findBySlug(slug);
   }
 
-  // API: GET /posts/:id
-  // API: GET /posts/:id
   @Get(':id')
   @UseInterceptors(CacheInterceptor)
   @CacheTTL(300)
@@ -160,44 +117,35 @@ export class PostsController {
     return this.postsService.findOne(id);
   }
 
-  // ==========================================
-  // 4. CẬP NHẬT BÀI VIẾT (UPDATE)
-  // API: PUT /posts/:id
-  // ==========================================
   @Put(':id')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('posts.update')
+  @Auditable({ action: 'update', resourceType: 'posts' })
   update(@Param('id') id: string, @Body() updatePostDto: UpdatePostDto, @Req() req: any) {
-    const user = req.user;
-    return this.postsService.update(id, updatePostDto, user);
+    return this.postsService.update(id, updatePostDto, req.user);
   }
 
-  // ==========================================
-  // 5. XÓA BÀI VIẾT (SOFT DELETE)
-  // API: DELETE /posts/:id
-  // ==========================================
   @Delete(':id')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('posts.delete')
+  @Auditable({ action: 'delete', resourceType: 'posts' })
   remove(@Param('id') id: string) {
-    console.log(`[Backend] Deleting Post with ID:`, id);
     return this.postsService.remove(id);
   }
-
-
 
   @Put(':id/restore')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('posts.delete')
+  @Auditable({ action: 'restore', resourceType: 'posts' })
   restore(@Param('id') id: string) {
     return this.postsService.restore(id);
   }
 
   @Delete(':id/permanent')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @Permissions('posts.delete') // Cần quyền cao hơn nếu muốn (ví dụ system.manage)
+  @Permissions('posts.delete')
+  @Auditable({ action: 'permanent_delete', resourceType: 'posts' })
   hardDelete(@Param('id') id: string) {
     return this.postsService.hardDelete(id);
   }
-
 }

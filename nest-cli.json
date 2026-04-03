@@ -10,6 +10,7 @@
         "outDir": "dist/src"
       }
     ],
-    "watchAssets": true
+    "watchAssets": true,
+    "builder": "swc"
   }
 }

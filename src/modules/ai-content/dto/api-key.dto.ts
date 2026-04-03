@@ -1,5 +1,5 @@
 import { IsNotEmpty, IsString, IsEnum, IsOptional, IsNumber } from 'class-validator';
-import { ApiKeyType } from '../entities/api-key.entity';
+import { ApiKeyType, AIProviderType } from '../entities/api-key.entity';
 
 export class UpdateApiKeyDto {
     @IsNotEmpty()
@@ -21,6 +21,10 @@ export class UpdateApiKeyDto {
     @IsOptional()
     @IsNumber()
     maxDailyQuota?: number;
+
+    @IsOptional()
+    @IsEnum(AIProviderType)
+    provider?: AIProviderType;
 }
 
 export class CreateApiKeyDto extends UpdateApiKeyDto { }

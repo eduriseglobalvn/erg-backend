@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@mikro-orm/nestjs';
 import { EntityRepository, wrap, FilterQuery } from '@mikro-orm/core';
 import { v4 as uuidv4 } from 'uuid';
@@ -15,6 +15,8 @@ import { MailerService } from '@nestjs-modules/mailer';
 
 @Injectable()
 export class RecruitmentService {
+    private readonly logger = new Logger(RecruitmentService.name);
+
     constructor(
         @InjectRepository(Job)
         private readonly jobRepository: EntityRepository<Job>,
@@ -30,6 +32,8 @@ export class RecruitmentService {
     async createJob(createJobDto: CreateJobDto): Promise<Job> {
         const job = this.jobRepository.create({
             ...createJobDto,
+            salaryCurrency: createJobDto.salaryCurrency || 'VND',
+            country: createJobDto.country || 'VN',
             status: createJobDto.status || JobStatus.NORMAL,
             summary: createJobDto.summary || '',
             isActive: createJobDto.isActive ?? true,
@@ -324,6 +328,7 @@ export class RecruitmentService {
         const trackingLink = `${baseUrl}/${candidate.trackingCode}`;
         const jobTitle = job?.title ?? 'Ứng tuyển chung';
         const applyTypeLabel = candidate.applyType === ApplyType.ZALO ? ' (qua Zalo)' : '';
+        const hrPhone = process.env.HR_PHONE_NUMBER || '0909 xxx xxx';
 
         try {
             await this.mailerService.sendMail({
@@ -352,7 +357,7 @@ export class RecruitmentService {
                             <p style="color: #666; font-size: 13px;">Hoặc copy link: <a href="${trackingLink}">${trackingLink}</a></p>
                             <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;">
                             <p style="color: #666; font-size: 13px;">
-                                📞 Nếu có thắc mắc, vui lòng liên hệ HR: <strong>0909 xxx xxx</strong><br>
+                                📞 Nếu có thắc mắc, vui lòng liên hệ HR: <strong>${hrPhone}</strong><br>
                                 📧 Email: <strong>tuyendung@erg.edu.vn</strong>
                             </p>
                         </div>
@@ -363,7 +368,7 @@ export class RecruitmentService {
                 `,
             });
         } catch (error) {
-            console.error('Failed to send application confirmation email:', error);
+            this.logger.error('Failed to send application confirmation email', error);
         }
     }
 }

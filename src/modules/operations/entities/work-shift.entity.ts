@@ -2,13 +2,13 @@
 
 import { Entity, Property, ManyToOne, Enum } from '@mikro-orm/core';
 import { BaseEntity } from '@/core/base/base.entity';
-import { User } from '@/modules/users/entities/user.entity';
+import type { User } from '@/modules/users/entities/user.entity';
 import { School } from '@/modules/organization/entities/school.entity';
 import { ShiftStatus, ShiftType } from '@/shared/enums/app.enum';
 
 @Entity({ tableName: 'work_shifts' })
 export class WorkShift extends BaseEntity {
-  @ManyToOne(() => User)
+  @ManyToOne('User')
   user!: User; // Nhân sự thực hiện ca làm việc
 
   @ManyToOne(() => School)
@@ -41,7 +41,7 @@ export class WorkShift extends BaseEntity {
   @Property({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   remuneration: number = 0; // Thù lao riêng cho ca này (nếu có, dùng để tính lương)
 
-  @ManyToOne(() => User, { nullable: true })
+  @ManyToOne('User', { nullable: true })
   confirmedBy?: User; // Người xác nhận (Check-in/Check-out) cho nhân viên này
 
   @Property({ nullable: true })

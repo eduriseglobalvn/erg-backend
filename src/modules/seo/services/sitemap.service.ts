@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { EntityManager } from '@mikro-orm/core';
 import { Post } from '@/modules/posts/entities/post.entity';
+import { Course } from '@/modules/courses/entities/course.entity';
+import { Page } from '@/modules/pages/entities/page.entity';
 import * as cheerio from 'cheerio';
 import { ConfigService } from '@nestjs/config';
+import { CourseStatus } from '@/shared/enums/app.enum';
 
 @Injectable()
 export class SitemapService {
@@ -19,19 +22,26 @@ export class SitemapService {
         const posts = await this.em.find(Post, {
             isPublished: true,
             robotsIndex: true,
-        }, {
-            fields: ['slug', 'content', 'title'],
-        });
+        }, { fields: ['slug', 'content', 'title'] });
+
+        const courses = await this.em.find(Course, {
+            status: CourseStatus.PUBLISHED,
+        }, { fields: ['slug', 'content', 'title'] } as any);
+
+        const pages = await this.em.find(Page, {}, { fields: ['slug', 'content', 'title'] });
+
+        const allEntities = [...posts, ...courses, ...pages];
 
         let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
         xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"\n';
         xml += '        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">\n';
 
-        for (const post of posts) {
-            const images = this.extractImages(post.content || '');
+        for (const entity of allEntities) {
+            const images = this.extractImages((entity as any).content || '');
             if (images.length === 0) continue;
 
-            const loc = this.siteUrl.endsWith('/') ? `${this.siteUrl}${post.slug}` : `${this.siteUrl}/${post.slug}`;
+            const baseSlug = (entity instanceof Course) ? `courses/${entity.slug}` : (entity instanceof Page) ? `pages/${entity.slug}` : entity.slug;
+            const loc = this.siteUrl.endsWith('/') ? `${this.siteUrl}${baseSlug}` : `${this.siteUrl}/${baseSlug}`;
 
             xml += '  <url>\n';
             xml += `    <loc>${loc}</loc>\n`;

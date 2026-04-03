@@ -10,9 +10,10 @@ import {
     Query,
     UseGuards,
     BadRequestException,
+    Res,
 } from '@nestjs/common';
 import { AnalyticsService } from './analytics.service';
-import type { Request } from 'express';
+import { Request, Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../access-control/guards/permissions.guard';
 import { Permissions } from '../access-control/decorators/permissions.decorator';
@@ -26,10 +27,6 @@ export class AnalyticsController {
         private readonly jwtService: JwtService,
     ) { }
 
-    /**
-     * Trích xuất userId từ Authorization header (nếu có)
-     * Dùng cho các API public mà vẫn muốn track user đã login
-     */
     private extractUserIdFromRequest(req: Request): number | undefined {
         try {
             const authHeader = req.headers.authorization;
@@ -51,29 +48,16 @@ export class AnalyticsController {
         }
     }
 
-    // ========== TRACKING APIS (Public - FE gọi từ mọi trang) ==========
-
-    /**
-     * POST /api/insight/session/begin
-     * 
-     * FE gọi API này khi user vào một trang mới.
-     * - Nếu user đã login: Gửi kèm Authorization header để track userId.
-     * - Backend tự động lấy IP, UserAgent, Location, Device.
-     * 
-     * @returns { visitId: string } - ID của visit để gọi update duration sau
-     */
     @Post('session/begin')
     async startVisit(
         @Body() body: TrackVisitDto,
         @Req() req: Request,
         @Ip() ip: string,
     ) {
-        // Validate URL
         if (!body.url) {
             throw new BadRequestException('URL is required');
         }
 
-        // Lấy IP thực từ header (sau reverse proxy) hoặc fallback
         const realIp = this.extractRealIp(req, ip);
         const userAgent = req.headers['user-agent'] || '';
         const userId = this.extractUserIdFromRequest(req);
@@ -89,17 +73,11 @@ export class AnalyticsController {
         });
     }
 
-    /**
-     * POST /api/insight/behavior
-     * 
-     * Track các sự kiện cụ thể (click button, xem video, submit form...)
-     */
     @Post('behavior')
     async trackEvent(
         @Body() body: TrackEventDto,
         @Req() req: Request,
     ) {
-        // Validate required fields
         if (!body.eventType) {
             throw new BadRequestException('eventType is required');
         }
@@ -117,12 +95,6 @@ export class AnalyticsController {
         });
     }
 
-    /**
-     * PUT /api/insight/session/:id/finish
-     * 
-     * FE gọi khi user rời trang (beforeunload) để cập nhật thời gian ở lại.
-     * Duration tính bằng giây.
-     */
     @Put('session/:id/finish')
     async updateDuration(
         @Param('id') id: string,
@@ -132,30 +104,17 @@ export class AnalyticsController {
             throw new BadRequestException('Visit ID is required');
         }
 
-        // Validate duration là số hợp lệ
         const durationSeconds = typeof duration === 'number' ? duration : parseInt(duration, 10);
         if (isNaN(durationSeconds) || durationSeconds < 0) {
             throw new BadRequestException('Duration must be a positive number');
         }
 
-        // Cap duration at 1 hour (3600s) để tránh spam
         const cappedDuration = Math.min(durationSeconds, 3600);
 
         await this.analyticsService.updateVisitDuration(id, cappedDuration);
         return { success: true };
     }
 
-    // ========== DASHBOARD API (Admin Only) ==========
-
-    /**
-     * GET /api/insight/stats
-     * 
-     * API chuyên biệt cho biểu đồ Traffic với bộ lọc thời gian tiện lợi.
-     * 
-     * @param range - '7d' | '30d' | '90d'. Default: '7d'
-     * @param from - Optional custom start date (YYYY-MM-DD)
-     * @param to - Optional custom end date (YYYY-MM-DD)
-     */
     @Get('stats')
     @UseGuards(JwtAuthGuard, PermissionsGuard)
     @Permissions('system.logs')
@@ -164,7 +123,6 @@ export class AnalyticsController {
         @Query('from') from?: string,
         @Query('to') to?: string,
     ) {
-        // Validate range preset
         const validRanges = ['7d', '30d', '90d'];
         if (!validRanges.includes(range) && !from) {
             throw new BadRequestException(`Invalid range. Must be one of: ${validRanges.join(', ')}`);
@@ -192,11 +150,6 @@ export class AnalyticsController {
         };
     }
 
-    /**
-     * GET /api/insight/overview
-     * 
-     * API tổng hợp cho Dashboard.
-     */
     @Get('overview')
     @UseGuards(JwtAuthGuard, PermissionsGuard)
     @Permissions('system.logs')
@@ -204,31 +157,26 @@ export class AnalyticsController {
         @Query('from') from?: string,
         @Query('to') to?: string,
     ): Promise<DashboardStatsResponse> {
-        // Parse và validate dates
         const now = new Date();
         let fromDate: Date;
         let toDate: Date;
 
-        // Parse 'to' date (default: end of today)
         if (to) {
             toDate = new Date(to);
             if (isNaN(toDate.getTime())) {
                 throw new BadRequestException('Invalid "to" date format. Use YYYY-MM-DD.');
             }
-            // Set to end of day
             toDate.setHours(23, 59, 59, 999);
         } else {
             toDate = new Date(now);
             toDate.setHours(23, 59, 59, 999);
         }
 
-        // Parse 'from' date (default: 7 days ago)
         if (from) {
             fromDate = new Date(from);
             if (isNaN(fromDate.getTime())) {
                 throw new BadRequestException('Invalid "from" date format. Use YYYY-MM-DD.');
             }
-            // Set to start of day
             fromDate.setHours(0, 0, 0, 0);
         } else {
             fromDate = new Date(now);
@@ -236,13 +184,11 @@ export class AnalyticsController {
             fromDate.setHours(0, 0, 0, 0);
         }
 
-        // Validate: from phải trước to
         if (fromDate > toDate) {
             throw new BadRequestException('"from" date must be before "to" date.');
         }
 
-        // Validate: Không cho phép query quá 1 năm để tránh query nặng
-        const maxRange = 365 * 24 * 60 * 60 * 1000; // 365 days in ms
+        const maxRange = 365 * 24 * 60 * 60 * 1000;
         if (toDate.getTime() - fromDate.getTime() > maxRange) {
             throw new BadRequestException('Date range cannot exceed 1 year.');
         }
@@ -250,11 +196,6 @@ export class AnalyticsController {
         return this.analyticsService.getDashboardStats(fromDate, toDate);
     }
 
-    /**
-     * GET /api/insight/posts/summary
-     * 
-     * API chuyên biệt cho thống kê Bài viết (Post Analytics)
-     */
     @Get('posts/summary')
     @UseGuards(JwtAuthGuard, PermissionsGuard)
     @Permissions('system.logs')
@@ -267,33 +208,53 @@ export class AnalyticsController {
         };
     }
 
-    // ========== HELPER METHODS ==========
+    @Get('export')
+    @UseGuards(JwtAuthGuard, PermissionsGuard)
+    @Permissions('system.logs')
+    async exportData(
+        @Query('from') from: string,
+        @Query('to') to: string,
+        @Res() res: Response
+    ) {
+        if (!from || !to) {
+            throw new BadRequestException('Both "from" and "to" dates are required for export.');
+        }
 
-    /**
-     * Lấy IP thực của client qua các header phổ biến
-     * (Hỗ trợ Nginx, Cloudflare, AWS ALB...)
-     */
+        const fromDate = new Date(from);
+        const toDate = new Date(to);
+        toDate.setHours(23, 59, 59, 999);
+
+        if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+            throw new BadRequestException('Invalid date format.');
+        }
+
+        const csv = await this.analyticsService.generateExportData(fromDate, toDate);
+
+        res.set({
+            'Content-Type': 'text/csv',
+            'Content-Disposition': `attachment; filename="traffic-report-${from}-to-${to}.csv"`,
+        });
+
+        return res.status(200).send(csv);
+    }
+
     private extractRealIp(req: Request, fallbackIp: string): string {
-        // Cloudflare
         const cfConnectingIp = req.headers['cf-connecting-ip'];
         if (cfConnectingIp) {
             return Array.isArray(cfConnectingIp) ? cfConnectingIp[0] : cfConnectingIp;
         }
 
-        // X-Forwarded-For (Nginx, AWS ALB)
         const xForwardedFor = req.headers['x-forwarded-for'];
         if (xForwardedFor) {
             const ips = (Array.isArray(xForwardedFor) ? xForwardedFor[0] : xForwardedFor).split(',');
             return ips[0].trim();
         }
 
-        // X-Real-IP (Alternative)
         const xRealIp = req.headers['x-real-ip'];
         if (xRealIp) {
             return Array.isArray(xRealIp) ? xRealIp[0] : xRealIp;
         }
 
-        // Fallback to direct connection IP
         return fallbackIp || '127.0.0.1';
     }
 }

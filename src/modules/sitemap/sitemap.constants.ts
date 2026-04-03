@@ -56,7 +56,13 @@ export const STATIC_URLS = [
     // 7. Subdomain Điện Toán Đám Mây
     { loc: 'https://dientoandammay.erg.edu.vn/', changefreq: 'daily', priority: 1.0, title: 'Điện toán đám mây' },
 
-    // 8. Subdomain Tuyển Dụng
+    // 8. Subdomain E-Learning (IC3 GS6)
+    { loc: 'https://elearning.erg.edu.vn/', changefreq: 'weekly', priority: 1.0, title: 'E-Learning IC3 GS6' },
+    { loc: 'https://elearning.erg.edu.vn/level/secondary/gs6-level-1', changefreq: 'weekly', priority: 0.9, title: 'IC3 GS6 Level 1 - Lớp 6' },
+    { loc: 'https://elearning.erg.edu.vn/level/secondary/gs6-level-2', changefreq: 'weekly', priority: 0.9, title: 'IC3 GS6 Level 2 - Lớp 7' },
+    { loc: 'https://elearning.erg.edu.vn/level/secondary/gs6-level-3', changefreq: 'weekly', priority: 0.9, title: 'IC3 GS6 Level 3 - Lớp 8 & 9' },
+
+    // 9. Subdomain Tuyển Dụng
     { loc: 'https://tuyendung.erg.edu.vn/', changefreq: 'daily', priority: 1.0, title: 'Tuyển dụng' },
     { loc: 'https://tuyendung.erg.edu.vn/tuyen-dung', changefreq: 'daily', priority: 0.9, title: 'Việc làm' },
     { loc: 'https://tuyendung.erg.edu.vn/chinh-sach', changefreq: 'monthly', priority: 0.7, title: 'Chính sách' },
@@ -72,5 +78,6 @@ export const DOMAIN_MAPPING = {
     TIN_HOC_THIEU_NHI: 'https://tinhocthieunhi.erg.edu.vn',
     CONG_DAN_SO: 'https://congdanso.erg.edu.vn',
     DIEN_TOAN_DAM_MAY: 'https://dientoandammay.erg.edu.vn',
+    ELEARNING: 'https://elearning.erg.edu.vn',
     TUYEN_DUNG: 'https://tuyendung.erg.edu.vn',
 };

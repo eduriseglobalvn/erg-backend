@@ -13,10 +13,12 @@ import { UserSession } from '@/modules/sessions/entities/user-session.entity';
 import { SessionsService } from '@/modules/sessions/sessions.service'; // Chỉnh lại import cho đúng vị trí nếu cần
 import { StorageService } from '@/shared/services/storage.service';
 import { UpdateProfileDto, ChangePasswordDto, OnboardingDto } from './dto/user.dto';
-import { UpdateUserStatusDto, AssignRolesDto } from './dto/admin-user.dto';
+import { UpdateUserStatusDto, AssignRolesDto, QueryUsersDto } from './dto/admin-user.dto';
 import { JobPosition } from '@/modules/organization/entities/job-position.entity';
 import { Region } from '@/modules/organization/entities/region.entity';
 import { Role } from '@/modules/access-control/entities/role.entity';
+import { AccessControlService } from '@/modules/access-control/access-control.service';
+import { UserActivityService, ActivityAction } from './services/user-activity.service';
 import 'multer'; // Import to ensure types are loaded
 
 @Injectable()
@@ -30,6 +32,8 @@ export class UsersService {
     private readonly roleRepo: EntityRepository<Role>,
     private readonly sessionsService: SessionsService,
     private readonly storageService: StorageService,
+    private readonly accessControlService: AccessControlService,
+    private readonly userActivityService: UserActivityService,
   ) { }
 
   // --- 1. LẤY THÔNG TIN CÁ NHÂN ---
@@ -54,10 +58,15 @@ export class UsersService {
 
     wrap(user).assign(dto);
 
-    // Cập nhật thông tin khác
-    if (dto.bio) {
-      user.bio = dto.bio;
-    }
+    // Cập nhật các trường đặc biệt nếu gửi lên
+    if (dto.bio !== undefined) user.bio = dto.bio;
+    if (dto.dateOfBirth) user.dateOfBirth = new Date(dto.dateOfBirth);
+    if (dto.gender !== undefined) user.gender = dto.gender;
+    if (dto.address !== undefined) user.address = dto.address;
+    if (dto.city !== undefined) user.city = dto.city;
+    if (dto.district !== undefined) user.district = dto.district;
+    if (dto.socialLinks !== undefined) user.socialLinks = dto.socialLinks;
+    if (dto.preferences !== undefined) user.preferences = dto.preferences;
 
     // Nếu có avatarUrl string (trong trường hợp FE gửi link trực tiếp)
     if (dto.avatarUrl) {
@@ -77,6 +86,17 @@ export class UsersService {
     // Ở mức độ cơ bản: Frontend sẽ tự gọi lại session/current, nếu cache cũ thì F5 sau 15p mới thấy.
     // ĐỂ TỐI ƯU NHẤT: Bạn nên sửa Controller truyền thêm sessionId vào.
     await this.sessionsService.clearSessionCache(userId, sessionId);
+
+    // Bắn event log activity
+    await this.userActivityService.logActivity(
+      userId,
+      user.email,
+      ActivityAction.PROFILE_UPDATE,
+      'unknown', // Controllers should eventually pass Req() info
+      'unknown',
+      { updatedFields: Object.keys(dto) }
+    );
+
     return user;
   }
 
@@ -175,14 +195,54 @@ export class UsersService {
   }
 
   // --- 6. ADMIN: LẤY DANH SÁCH USER (Cơ bản) ---
-  async findAllUsers(page: number, limit: number) {
+  async findAllUsers(query: QueryUsersDto) {
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      status,
+      role,
+      provider,
+      dateFrom,
+      dateTo,
+      sortBy = 'createdAt',
+      sortOrder = 'DESC',
+    } = query;
+
+    const filter: any = {};
+
+    if (search) {
+      filter.$or = [
+        { email: { $ilike: `%${search}%` } },
+        { fullName: { $ilike: `%${search}%` } },
+        { phone: { $ilike: `%${search}%` } },
+      ];
+    }
+
+    if (status) filter.status = status;
+    if (provider) filter.provider = provider;
+
+    if (dateFrom || dateTo) {
+      filter.createdAt = {};
+      if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) filter.createdAt.$lte = new Date(dateTo);
+    }
+
+    // Ghi chú: MikroORM mongo driver không join dễ như SQL, 
+    // Mặc định User -> Roles là ManyToMany SQL, filter bằng 'populate' & custom queries
+    if (role) {
+      // Vì populate rôles có thể phức tạp trong find basic, ta tối giản tìm bằng filter nested
+      filter.roles = { name: role };
+    }
+
     const [users, count] = await this.userRepo.findAndCount(
-      {},
+      filter,
       {
         limit,
         offset: (page - 1) * limit,
-        orderBy: { createdAt: 'DESC' },
-      },
+        orderBy: { [sortBy]: sortOrder.toLowerCase() },
+        populate: ['roles'],
+      }
     );
 
     return {
@@ -199,7 +259,20 @@ export class UsersService {
     return user;
   }
 
-  // --- 7. ADMIN: QUẢN LÝ TRẠNG THÁI USER (BLOCK/BAN) ---
+  // --- 7. ADMIN: XEM CHI TIẾT USER ---
+  async findOneAdminView(userId: string) {
+    const user = await this.userRepo.findOne(userId, {
+      populate: ['roles', 'sessions', 'jobPosition', 'region', 'socialAccounts'],
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    return user;
+  }
+
+  // --- 8. ADMIN: QUẢN LÝ TRẠNG THÁI USER (BLOCK/BAN) ---
   async updateUserStatus(userId: string, dto: UpdateUserStatusDto) {
     const user = await this.userRepo.findOne(userId);
     if (!user) throw new NotFoundException('User not found');
@@ -238,6 +311,23 @@ export class UsersService {
 
     await this.userRepo.getEntityManager().flush();
     return user;
+  }
+
+  async assignDirectPermissions(
+    assignerId: string,
+    userId: string,
+    permissionsToGrant: string[],
+    permissionsToDeny: string[]
+  ) {
+    // Validate that the user exists
+    await this.userRepo.findOneOrFail(userId);
+
+    return this.accessControlService.assignDirectPermissions(
+      assignerId,
+      userId,
+      permissionsToGrant,
+      permissionsToDeny
+    );
   }
 
   // --- 9. ADMIN: XÓA USER (SOFT DELETE) ---

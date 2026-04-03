@@ -72,6 +72,14 @@ export class CreateJobDto {
     benefits: string[];
 
     @IsOptional()
+    @IsString()
+    salaryCurrency?: string;
+
+    @IsOptional()
+    @IsString()
+    country?: string;
+
+    @IsOptional()
     @IsBoolean()
     isActive?: boolean;
 }
